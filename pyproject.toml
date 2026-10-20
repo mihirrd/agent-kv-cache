@@ -1,0 +1,33 @@
+[project]
+name = "kvtier"
+version = "0.1.0"
+description = "Tool-aware KV cache tiering for agentic LLM serving"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "vllm",
+    "lmcache==0.5.6",
+    "httpx",
+    "numpy",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+vllm = { path = "third_party/vllm", editable = true }
+
+# Editable vLLM reuses the compiled kernels from the matching PyPI wheel. The remote
+# copy has no .git (rsync excludes it), so the wheel and version are given explicitly.
+[tool.uv.extra-build-variables]
+vllm = { VLLM_USE_PRECOMPILED = "1", VLLM_VERSION_OVERRIDE = "0.31.0", VLLM_PRECOMPILED_WHEEL_LOCATION = "https://files.pythonhosted.org/packages/e1/98/841d1328827dc082492fcbb0f57bdf6a9d35aa0df52bd47b75be3f504804/vllm-0.31.0-cp38-abi3-manylinux_2_28_x86_64.whl" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: needs a GPU or a running vLLM server"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

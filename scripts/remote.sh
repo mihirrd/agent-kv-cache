@@ -11,6 +11,7 @@ rsync -az --delete \
   --exclude .git --exclude .venv --exclude __pycache__ --exclude .pytest_cache \
   --exclude results/ --exclude logs/ --exclude traces/raw/ \
   --exclude '*.docx' \
+  --filter 'P third_party/vllm/**' \
   ./ "$HOST:$DIR/"
 
 ssh "$HOST" "export PATH=\$HOME/.local/bin:\$PATH; cd $DIR && $*"
