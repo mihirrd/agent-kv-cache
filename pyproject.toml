@@ -12,6 +12,8 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest"]
+# C5 trace recording: mini-SWE-agent (pulls LiteLLM) driving SWE-bench tasks in Docker.
+record = ["mini-swe-agent==2.4.6"]
 
 [build-system]
 requires = ["hatchling"]
@@ -31,3 +33,4 @@ markers = ["gpu: needs a GPU or a running vLLM server"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+default-groups = ["dev", "record"]
