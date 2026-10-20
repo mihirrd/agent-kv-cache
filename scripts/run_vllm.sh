@@ -7,8 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODEL=${MODEL:-Qwen/Qwen2.5-Coder-0.5B-Instruct}
-GPU=${GPU:-1}
-TP=${TP:-1}
+GPU=${GPU:-0,1}
+TP=${TP:-2}
 PORT=${PORT:-8000}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.85}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
