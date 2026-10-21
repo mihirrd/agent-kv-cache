@@ -11,7 +11,7 @@ from dataclasses import dataclass
 _CATEGORIES = {
     "test": {"pytest", "py.test", "tox", "nox", "nosetests", "runtests.py", "unittest", "ctest", "jest", "mocha", "rspec"},
     "build": {"cargo", "go", "mvn", "gradle", "gradlew", "make", "cmake", "ninja", "npm", "yarn", "pnpm", "javac",
-              "gcc", "g++", "clang", "rustc", "bundle", "composer"},
+              "gcc", "g++", "clang", "rustc", "bundle", "composer", "ant", "sbt"},
     "install": {"pip", "pip3", "conda", "apt-get", "apt", "uv", "poetry"},
     "inspect": {"grep", "rg", "find", "ls", "cat", "head", "tail", "sed", "awk", "wc", "git", "echo", "diff", "nl",
                 "tree", "which", "pwd", "file", "stat"},

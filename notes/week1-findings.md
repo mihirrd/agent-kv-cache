@@ -143,8 +143,53 @@ What this means:
 4. `pip` is ~10% of tool calls: the agent installing test tooling in fresh containers.
 
 ### Multilingual compiled set: 20 tasks, `traces/raw/multilingual/`
-Rust, Go, Java and C/C++ repos from SWE-bench Multilingual (`--dataset multilingual --compiled`).
-Recording in progress; results to be added.
+Rust, Go, Java and C/C++ repos from SWE-bench Multilingual (`--dataset multilingual --compiled`):
+tokio, axum, bat, ruff, nushell, caddy, gin, hugo, terraform, lombok, gson, lucene, druid, redis, nlohmann/json.
+
+| Metric | Value |
+|---|---|
+| Outcome | 19 submitted, 1 hit the context cap (hugo-12562, 20 turns) |
+| Cost | $0.115 total, $0.006/task |
+| Turns/session | min 4, p50 9, p90 18, max 24 (208 total) |
+| Final context (Qwen tokens) | min 4.1K, p50 6.7K, p90 14.2K, max 15.2K |
+
+Tool pauses, 203 tool calls:
+
+| p10 | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| 0.04 s | 0.06 s | **12.1 s** | **72.8 s** | **126.3 s** |
+
+| Pauses longer than | Share of pauses | Share of total pause time |
+|---|---|---|
+| 1 s | 25.6% | 97.9% |
+| 5 s | 14.3% | 92.6% |
+| 10 s | 10.3% | 86.8% |
+| 30 s | 4.9% | 62.6% |
+
+| Category | n | p10 | p50 | p90 | max | Main programs |
+|---|---|---|---|---|---|---|
+| inspect | 157 | 0.04 s | 0.05 s | 1.08 s | 73.2 s | sed, grep, cat, git |
+| run | 22 | 0.06 s | 3.54 s | 25.9 s | 34.2 s | python3, perl |
+| other | 13 | 0.06 s | 5.92 s | 94.4 s | 126.3 s | rm, mkdir, printf, ant |
+| build | 11 | 0.82 s | **21.3 s** | 42.7 s | 45.0 s | mvn, go, cargo, gradlew |
+
+- The compiled set roughly doubles the tail of the Python set: p90 12 s vs 3 s, and 10% of pauses over 10 s vs 3%.
+- Build and test steps (`build`, p50 21 s) are the long, predictable pauses the policy targets, but
+  they are rare: 11 of 203 calls. Agents mostly inspect and edit.
+- `ant` (Java builds) was missing from the `build` category; added after this run.
+
+### All 70 traces combined
+
+| Metric | Value |
+|---|---|
+| Outcome | 68 submitted, 2 context cap; $0.377 total |
+| Turns/session | p50 10, p90 16, max 24 (756 total) |
+| Final context | p50 6.3K, p90 9.4K, max 15.2K Qwen tokens |
+| Tool pauses (742) | p10 0.04 s, p50 0.08 s, p90 4.4 s, p99 39.5 s, max 126 s |
+| Pauses > 5 s | 8.8% of pauses, **80.5% of total pause time** |
+| Pauses > 30 s | 1.9% of pauses, 44.2% of total pause time |
+
+Docker images for the 70 tasks use ~60 GB; 282 GB free afterwards.
 
 ## Implementation status (end of Oct 20)
 
@@ -155,6 +200,6 @@ Recording in progress; results to be added.
 | C2 `kvtier/predictor.py` | back-off keys, ring buffer 50, p10/p50/p90, confidence rule; tested |
 | C3 `kvtier/cost.py` | interpolated prefill cost, KEEP/OFFLOAD/DISCARD, eviction score, prefetch time; placeholder calibration from Gate A; tested |
 | `kvtier/policy.py` | `KVPolicy` interface shared by the simulator and vLLM; methods take `now` |
-| C5 `kvtier/recorder.py` | done; 50 Verified traces recorded, 20 Multilingual in progress |
+| C5 `kvtier/recorder.py` | done; 70 traces recorded (50 Verified, 20 Multilingual compiled) |
 | C7 simulator | next |
 | Gate C (headroom) | after the simulator, on an 80% training split of traces |
