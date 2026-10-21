@@ -28,13 +28,14 @@ PRICE_CACHE_READ, PRICE_CACHE_WRITE = 0.1 * PRICE_INPUT, 1.25 * PRICE_INPUT
 
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\|")
+_GROUPING = re.compile(r"[(){}]")
 
 
 def tool_program(command: str) -> str:
     """Program a command runs, as the predictor's key: skips cd/export and VAR=x prefixes."""
     first_line = command.strip().splitlines()[0] if command.strip() else ""
     for segment in _SEGMENT_SPLIT.split(first_line):
-        words = [w for w in segment.split() if not _ENV_ASSIGN.match(w)]
+        words = [w for w in _GROUPING.sub(" ", segment).split() if not _ENV_ASSIGN.match(w)]
         if not words or words[0] in ("cd", "export"):
             continue
         program = words[0].rsplit("/", 1)[-1]
@@ -209,11 +210,61 @@ def record_instance(instance: dict, config: dict, out_dir: Path, count_tokens, c
     return {"instance_id": iid, "exit_status": info.get("exit_status"), "turns": agent.n_calls, "cost": agent.total_cost}
 
 
+# Appended to the task prompt so the agent tests like production coding agents do; without it,
+# Haiku edits and submits in ~5 turns with ~50 ms tool pauses (pilot, 2026-10-20).
+TESTING_WORKFLOW = """
+<testing_requirements>
+Work like a careful engineer. These steps are REQUIRED before you submit:
+
+1. Before editing, write a small script that reproduces the issue and run it to confirm it fails.
+2. After editing, run your reproduction script again and confirm the issue is fixed.
+3. Find and run the repository's existing tests for every module you changed, using the project's
+   own build and test tooling (for example `python -m pytest <test file or directory>`,
+   `./tests/runtests.py <app>` for Django, `cargo test`, `go test ./<package>/...`, `mvn test` or
+   `./gradlew test`, `make test`). Run a meaningful test file, package or module, not a single test function.
+4. If any test fails, investigate, fix your change, and run the tests again until they pass.
+
+Only submit after the relevant existing tests pass.
+</testing_requirements>
+"""
+
+
+DATASETS = {"verified": "princeton-nlp/SWE-Bench_Verified", "multilingual": "swe-bench/SWE-Bench_Multilingual"}
+
+# SWE-bench Multilingual repos with compiled builds (Rust, Go, Java, C/C++), for slower tool steps.
+COMPILED_REPOS = (
+    r"^(tokio-rs/|sharkdp/bat|astral-sh/ruff|nushell/|burntsushi/ripgrep|uutils/coreutils"
+    r"|caddyserver/|gin-gonic/|prometheus/|gohugoio/|hashicorp/terraform"
+    r"|projectlombok/|google/gson|apache/lucene|apache/druid|javaparser/|reactivex/"
+    r"|redis/|valkey-io/|fmtlib/|jqlang/|micropython/|nlohmann/)"
+)
+
+
+def build_config(model: str, step_limit: int, task_cost_limit: float, command_timeout: int, require_tests: bool) -> dict:
+    from minisweagent.config import builtin_config_dir, get_config_from_spec
+    from minisweagent.utils.serialize import recursive_merge
+
+    config = recursive_merge(
+        get_config_from_spec(builtin_config_dir / "benchmarks" / "swebench_backticks.yaml"),
+        {
+            "model": {
+                "model_class": "litellm_textbased",
+                "model_name": model,
+                "cost_tracking": "ignore_errors",
+                "set_cache_control": "default_end",
+            },
+            "agent": {"step_limit": step_limit, "cost_limit": task_cost_limit},
+            "environment": {"pull_timeout": 1800, "timeout": command_timeout},
+        },
+    )
+    if require_tests:
+        config["agent"]["instance_template"] += TESTING_WORKFLOW
+    return config
+
+
 def main() -> None:
     from datasets import load_dataset
-    from minisweagent.config import builtin_config_dir, get_config_from_spec
     from minisweagent.run.benchmarks.swebench import filter_instances
-    from minisweagent.utils.serialize import recursive_merge
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", required=True, type=Path)
@@ -225,23 +276,19 @@ def main() -> None:
     ap.add_argument("--task-cost-limit", type=float, default=0.50)
     ap.add_argument("--step-limit", type=int, default=80)
     ap.add_argument("--qwen-model", default="Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
+    ap.add_argument("--command-timeout", type=int, default=600, help="seconds before a tool command is killed")
+    ap.add_argument("--no-require-tests", dest="require_tests", action="store_false", help="omit TESTING_WORKFLOW")
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="verified")
+    ap.add_argument("--repo-filter", default="", help="regex on the repo name")
+    ap.add_argument("--compiled", action="store_true", help="only COMPILED_REPOS (Rust, Go, Java, C/C++)")
     args = ap.parse_args()
+    if args.compiled:
+        args.repo_filter = COMPILED_REPOS
 
-    config = recursive_merge(
-        get_config_from_spec(builtin_config_dir / "benchmarks" / "swebench_backticks.yaml"),
-        {
-            "model": {
-                "model_class": "litellm_textbased",
-                "model_name": args.model,
-                "cost_tracking": "ignore_errors",
-                "set_cache_control": "default_end",
-            },
-            "agent": {"step_limit": args.step_limit, "cost_limit": args.task_cost_limit},
-            "environment": {"pull_timeout": 1800},
-        },
-    )
+    config = build_config(args.model, args.step_limit, args.task_cost_limit, args.command_timeout, args.require_tests)
 
-    instances = list(load_dataset("princeton-nlp/SWE-Bench_Verified", split="test"))
+    instances = list(load_dataset(DATASETS[args.dataset], split="test"))
+    instances = [i for i in instances if re.search(args.repo_filter, i["repo"])]
     instances = filter_instances(instances, filter_spec="", shuffle=True)[args.offset : args.offset + args.n]
     done = {p.stem for p in args.out.glob("*.jsonl")} if args.out.exists() else set()
     todo = [i for i in instances if i["instance_id"] not in done]

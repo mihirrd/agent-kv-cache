@@ -17,6 +17,8 @@ TEMPLATES = {"system_template": "sys", "instance_template": "task: {{task}}"}
         ("/usr/bin/grep -rn foo .", "grep"),
         ("cat <<'EOF' > a.py\nprint(1)\nEOF", "cat"),
         ("cd sub; sed -n 1,20p x.py", "sed"),
+        ("(cd /testbed && ls)", "ls"),
+        ("{ cargo test -p foo; } 2>&1", "cargo"),
         ("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git diff", "echo"),
         ("", ""),
     ],
@@ -154,3 +156,14 @@ def test_qwen_token_counter_counts_tokens():
     long = count([{"role": "user", "content": "hello world " * 500}])
     assert 5 < short < 50
     assert long - short > 900
+
+
+def test_build_config_testing_workflow():
+    from kvtier.recorder import TESTING_WORKFLOW, build_config
+
+    with_tests = build_config("anthropic/claude-haiku-5-5", 80, 0.5, 600, require_tests=True)
+    without = build_config("anthropic/claude-haiku-5-5", 80, 0.5, 600, require_tests=False)
+    assert with_tests["agent"]["instance_template"].endswith(TESTING_WORKFLOW)
+    assert TESTING_WORKFLOW not in without["agent"]["instance_template"]
+    assert with_tests["environment"]["timeout"] == 600
+    assert with_tests["model"]["model_class"] == "litellm_textbased"
