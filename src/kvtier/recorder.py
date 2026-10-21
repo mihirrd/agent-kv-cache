@@ -182,7 +182,8 @@ def qwen_token_counter(model_name: str) -> Callable[[list[dict]], int]:
 
     def count(messages: list[dict]) -> int:
         with lock:
-            return len(tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True))
+            text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            return len(tokenizer(text, add_special_tokens=False)["input_ids"])
 
     return count
 

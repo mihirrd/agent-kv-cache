@@ -143,3 +143,14 @@ def test_context_cap_stops_before_request(tmp_path):
     assert len(turns) == 2
     assert footer["exit_status"] == "ContextCap"
     assert turns[1]["qwen_prompt_tokens"] == 4000
+
+
+@pytest.mark.gpu  # needs the Qwen tokenizer in gpubox's HF cache
+def test_qwen_token_counter_counts_tokens():
+    from kvtier.recorder import qwen_token_counter
+
+    count = qwen_token_counter("Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
+    short = count([{"role": "user", "content": "hi"}])
+    long = count([{"role": "user", "content": "hello world " * 500}])
+    assert 5 < short < 50
+    assert long - short > 900
