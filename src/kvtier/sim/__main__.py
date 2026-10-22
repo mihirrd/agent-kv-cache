@@ -17,10 +17,11 @@ from kvtier.cost import GATE_A_TP2, CostModel, PredictivePolicy
 from kvtier.sessions import common_prefix_blocks, load_sessions
 from kvtier.sim.engine import SimConfig, Simulator
 from kvtier.sim.metrics import summarize, write_outputs
-from kvtier.sim.policies import EvictOnlyOracle, EvictOnlyPredictive, LruPolicy, OraclePolicy, TtlPinPolicy, warm_start
+from kvtier.sim.policies import (EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy, LruPolicy, OraclePolicy,
+                                 TtlPinPolicy, warm_start)
 
 POLICIES = ("vllm", "always-offload", "ttl-pin", "predictive", "predictive-cold", "oracle", "noisy-oracle",
-            "oracle-evict", "predictive-evict")
+            "oracle-evict", "predictive-evict", "long-offload", "long-offload-oracle")
 DEFAULT_SESSIONS = ("traces/sessions/verified.jsonl", "traces/sessions/multilingual.jsonl")
 
 
@@ -35,7 +36,7 @@ def split(sessions_by_file: list[list], which: str, train_share: float = 0.8, se
     return out
 
 
-def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, seed: int):
+def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, seed: int, threshold_s: float = 5.0):
     if name in ("vllm", "always-offload"):
         return LruPolicy()
     if name == "ttl-pin":
@@ -49,6 +50,12 @@ def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, s
         return OraclePolicy(cost)
     if name == "noisy-oracle":
         return OraclePolicy(cost, noise=noise, seed=seed)
+    if name == "long-offload":
+        p = LongCallOffloadPolicy(threshold_s)
+        warm_start(p, train)
+        return p
+    if name == "long-offload-oracle":
+        return LongCallOffloadPolicy(threshold_s, oracle=True)
     if name == "oracle-evict":
         return EvictOnlyOracle(cost)
     if name == "predictive-evict":
@@ -65,7 +72,7 @@ def run_one(policy: str, load: float, cap: int, seed: int, opts: dict) -> dict:
     cost = CostModel(GATE_A_TP2)
     cfg = SimConfig(load_per_min=load, cap_tokens=cap, cpu_tier=policy != "vllm", prefetch=not opts["no_prefetch"],
                     warmup_s=opts["warmup"], duration_s=opts["duration"], seed=seed)
-    pol = make_policy(policy, cost, train, opts["ttl"], opts["noise"], seed)
+    pol = make_policy(policy, cost, train, opts["ttl"], opts["noise"], seed, opts["threshold"])
     t0 = time.time()
     rec = Simulator(sessions, pol, cost, cfg, common_prefix_blocks(sessions)).run()
     summary = {"policy": policy, "load_per_min": load, "cap_tokens": cap, "seed": seed,
@@ -94,13 +101,15 @@ def main() -> None:
     ap.add_argument("--split", choices=("train", "holdout", "all"), default="train")
     ap.add_argument("--ttl", type=float, default=5.0, help="TTL-pin seconds")
     ap.add_argument("--noise", type=float, default=0.5, help="noisy-oracle relative error")
+    ap.add_argument("--threshold", type=float, default=5.0, help="long-offload: pauses longer than this are long")
     ap.add_argument("--no-prefetch", action="store_true")
     ap.add_argument("--warmup", type=float, default=120.0)
     ap.add_argument("--duration", type=float, default=600.0)
     ap.add_argument("--out", default="results/sim")
     ap.add_argument("--workers", type=int, default=14)
     args = ap.parse_args()
-    opts = {k: getattr(args, k) for k in ("sessions", "split", "ttl", "noise", "no_prefetch", "warmup", "duration", "out")}
+    opts = {k: getattr(args, k) for k in ("sessions", "split", "ttl", "noise", "threshold", "no_prefetch", "warmup",
+                                          "duration", "out")}
     grid = [(p, l, c, s) for p in args.policy for l in args.load for c in args.cap for s in args.seed]
     if args.mode == "run" and len(grid) > 1:
         ap.error("run takes one value per option; use sweep for a grid")

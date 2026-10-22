@@ -66,7 +66,36 @@ class EvictOnlyPredictive(EvictOnlyMixin, PredictivePolicy):
     pass
 
 
-def warm_start(policy: PredictivePolicy, sessions) -> None:
+class LongCallOffloadPolicy(LruPolicy):
+    """Classify each tool call as long or short when its pause starts; offload long ones at once,
+    keep short ones on GPU. Eviction under pressure is LRU, as in always-offload; no prefetch.
+
+    Long = predicted median pause > threshold_s (from the C2 predictor), or with `oracle=True`
+    the true pause > threshold_s (an ended session counts as long).
+    """
+
+    def __init__(self, threshold_s: float, predictor: PausePredictor | None = None, oracle: bool = False):
+        self.threshold_s = threshold_s
+        self.predictor = predictor or PausePredictor()
+        self.oracle = oracle
+
+    def is_long(self, s: Session) -> bool:
+        if self.oracle:
+            p = math.inf if s.true_pause_s is None else s.true_pause_s
+            s.prediction = Prediction(p, p, p, 1, True, ("oracle",))
+            return p > self.threshold_s
+        s.prediction = self.predictor.predict(s.session_id, s.program)
+        return s.prediction is not None and s.prediction.p50 > self.threshold_s
+
+    def on_pause(self, s: Session, now: float) -> Action:
+        return Action.OFFLOAD if self.is_long(s) else Action.KEEP
+
+    def on_return(self, s: Session, pause_s: float) -> None:
+        if not self.oracle:
+            self.predictor.observe(s.session_id, s.program, pause_s)
+
+
+def warm_start(policy, sessions) -> None:
     """Seed the predictor with the pauses of training sessions (as other, earlier sessions)."""
     for rs in sessions:
         for t in rs.turns:

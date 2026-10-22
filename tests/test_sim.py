@@ -191,3 +191,32 @@ def test_no_pressure_policies_agree():
         _, rec = simulate(pol, arrivals, cap_tokens=500_000, cpu=cpu)
         ttft[name] = [round(r["ttft"], 9) for r in sorted(rec.requests, key=lambda r: (r["sid"], r["turn"]))]
     assert ttft["vllm"] == ttft["lru-cpu"] == ttft["ttl"]
+
+
+def test_long_call_offload_classifies_by_predicted_median():
+    from kvtier.policy import Action, Session
+    from kvtier.predictor import PausePredictor
+    from kvtier.sim.policies import LongCallOffloadPolicy
+
+    pred = PausePredictor(min_samples=5)
+    for _ in range(5):
+        pred.observe("x", "pip", 12.0)
+        pred.observe("x", "grep", 0.05)
+    pol = LongCallOffloadPolicy(threshold_s=2.0, predictor=pred)
+    assert pol.on_pause(Session("s", program="pip"), 0.0) is Action.OFFLOAD
+    assert pol.on_pause(Session("s", program="grep"), 0.0) is Action.KEEP
+    assert pol.prefetch_at(Session("s")) is None  # no prefetch
+    oracle = LongCallOffloadPolicy(threshold_s=2.0, oracle=True)
+    assert oracle.on_pause(Session("s", program="grep", true_pause_s=30.0), 0.0) is Action.OFFLOAD
+    assert oracle.on_pause(Session("s", program="pip", true_pause_s=0.5), 0.0) is Action.KEEP
+    assert oracle.on_pause(Session("s", true_pause_s=None), 0.0) is Action.OFFLOAD  # session ended
+
+
+def test_long_call_offload_runs_end_to_end():
+    from kvtier.sim.policies import LongCallOffloadPolicy
+
+    arrivals = [(5.0 * i, s) for i, s in enumerate(many_sessions())]
+    sim, rec = simulate(LongCallOffloadPolicy(2.0, oracle=True), arrivals, cap_tokens=12_000, cpu=True)
+    assert len(rec.requests) == sum(len(s.turns) for _, s in arrivals)
+    assert {p["action"] for p in rec.pauses} == {"keep", "offload"}
+    assert not rec.warmups

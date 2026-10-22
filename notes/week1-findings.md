@@ -240,6 +240,27 @@ What the numbers show:
 5. **The server is compute-bound** where memory pressure exists; returning TTFT is dominated by
    queueing and prefill of new tokens.
 
+**Long-call offload (user's idea, Oct 22).** Classify each tool call as long or short when its pause starts
+(predicted p50 > T, or the true pause for an upper bound); offload long ones at once, keep short ones;
+LRU eviction; no prefetch. Thresholds T = 1, 2, 5, 10 s; same loads and caps; 3 seeds.
+
+| Load, cap | Guess T=1 | T=5 | T=10 | Perfect T=1 | T=5 | T=10 |
+|---|---|---|---|---|---|---|
+| 4, tight | −5.0% | −0.2% | −0.7% | −5.4% | −3.0% | −1.6% |
+| 6, tight | −3.1% | +0.1% | −0.2% | −5.3% | −1.5% | −0.7% |
+| 8, tight | −4.9% | −2.2% | −0.6% | −7.5% | −2.4% | −2.9% |
+| 6, full | −0.9% | +0.5% | +0.6% | −4.0% | −1.0% | +0.1% |
+| 8, full | −8.1% | −2.8% | −1.6% | −11.2% | −5.3% | −4.7% |
+
+Guess quality at load 6, tight cap: for T = 1 s, 21% of pauses are long; precision 86%, recall 46%.
+For T = 10 s, 5% are long; precision 50%, recall 12%.
+
+More offloading is consistently worse, even with a perfect guess. Every finished turn is already
+stored to CPU and a paused session's GPU blocks are reclaimed instantly when needed, so offloading
+early frees memory nobody needs yet. LRU frees the same long-paused session under pressure, while
+early offload makes returns that could have hit GPU pay a reload. Tool-awareness can only pay through
+timing (prefetch hiding the reload) or by avoiding work (not storing short calls).
+
 Caveats before treating this as final:
 - The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
   block the step; an asynchronous prefetch path (LMCache controller API) would make proactive
