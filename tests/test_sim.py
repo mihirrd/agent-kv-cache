@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from kvtier.cost import Calibration, CostModel, PredictivePolicy
@@ -242,3 +244,57 @@ def test_remaining_time_eviction_order():
     b = Session("b", pause_start=0.0, true_pause_s=None)  # session ended: never returns
     c = Session("c", pause_start=0.0, true_pause_s=5.0)
     assert [s.session_id for s in belady.eviction_order([c, a, b], now=1.0)] == ["b", "a", "c"]
+
+
+def test_continuum_ttl_choice():
+    from kvtier.policy import Session
+    from kvtier.sim.policies import ContinuumPolicy
+
+    pol = ContinuumPolicy(COST, k_min=3)
+    s = Session("s", program="pytest", context_tokens=8000)  # gain = 8.0 s prefill - 0.2229 s reload
+    gain = 8.0 - COST.reload_s(8000)
+    for x in (1.0, 2.0, 3.0, 50.0, 60.0):  # 5 > k_min records: this tool's own history
+        pol.record("pytest", x)
+    # candidates: tau=1 -> 0.2 gain - 1, 2 -> 0.4 gain - 2, 3 -> 0.6 gain - 3 (best), 50 -> 0.8 gain - 50, ...
+    assert pol.ttl(s) == 3.0 and 0.6 * gain - 3 > 0.4 * gain - 2
+    pol.record("grep", 0.05)  # too few grep records: falls back to everything recorded
+    assert pol.ttl(Session("g", program="grep", context_tokens=8000)) == 3.0
+    cold = ContinuumPolicy(COST)  # no history: Exp(1) default, tau = ln(gain)
+    assert cold.ttl(s) == pytest.approx(math.log(gain))
+    cold.observe_queue_delay(2.0)
+    assert cold.queue_delay_s == pytest.approx(0.1)  # running average starts from zero
+
+
+def test_continuum_pins_then_evicts_latest_program_first():
+    from kvtier.policy import Session
+    from kvtier.sim.policies import ContinuumPolicy
+
+    pol = ContinuumPolicy(COST)
+    expired = Session("expired", pinned_until=5.0, last_used=1.0, program_arrival=0.0)
+    pinned_old = Session("pinned_old", pinned_until=50.0, last_used=8.0, program_arrival=1.0)
+    pinned_new = Session("pinned_new", pinned_until=50.0, last_used=9.0, program_arrival=7.0)
+    order = pol.eviction_order([pinned_old, pinned_new, expired], now=10.0)
+    assert [s.session_id for s in order] == ["expired", "pinned_new", "pinned_old"]
+
+
+def test_program_fcfs_queue_order():
+    gpu = GpuPool(10_000)
+    srv = Server(gpu, None, StepModel(COST), 0, make_room=lambda n, t: 0,
+                 queue_key=lambda r: (not r.pinned, r.program_arrival, r.arrival))
+    srv.submit(Request("new", 0, [], 100, 2, 5.0, program_arrival=5.0))
+    srv.submit(Request("old", 3, [], 100, 2, 6.0, program_arrival=1.0))
+    srv.submit(Request("pinned", 2, [], 100, 2, 7.0, program_arrival=3.0, pinned=True))
+    plan = srv.plan(7.0)
+    assert [r.sid for r in plan.admitted] == ["pinned", "old", "new"]
+
+
+def test_continuum_end_to_end():
+    from kvtier.sim.policies import ContinuumPolicy
+
+    arrivals = [(5.0 * i, s) for i, s in enumerate(many_sessions())]
+    cfg = SimConfig(load_per_min=1, cap_tokens=12_000, cpu_tier=True, prefetch=False, warmup_s=0,
+                    duration_s=1000, drain_s=0, seed=0, program_fcfs=True)
+    sim = Simulator([s for _, s in arrivals], ContinuumPolicy(COST), COST, cfg, shared_blocks=0)
+    rec = sim.run(fixed_arrivals=arrivals)
+    assert len(rec.requests) == sum(len(s.turns) for _, s in arrivals)
+    assert sim.gpu.anon == 0 and all(b.refs == 0 for b in sim.gpu.blocks.values())

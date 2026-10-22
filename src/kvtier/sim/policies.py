@@ -120,9 +120,71 @@ class RemainingTimeEviction(LruPolicy):
             self.predictor.observe(s.session_id, s.program, pause_s)
 
 
+class ContinuumPolicy(LruPolicy):
+    """Continuum (Li et al., arXiv:2511.02230): pin a paused session's KV for a TTL chosen at pause start.
+
+    TTL = argmax over tau in {0} + past durations of this tool of  P(pause <= tau) x (T x eta + prefill - reload) - tau,
+    with P the empirical CDF of the tool's past durations (all tools' if it has <= k_min records; an Exp(1)
+    default if there is almost no history), T a running average of queueing delay, and eta = 1 (their
+    memoryfulness factor; -Corr(k, N - k) is 1 within one program). Pinned KV is not evicted unless
+    admission is stuck; then pinned sessions go latest program arrival first. Expired pins become ordinary
+    LRU cache with the LMCache CPU copy. Their queue order (pinned first, then program arrival) is
+    SimConfig.program_fcfs.
+    """
+
+    def __init__(self, cost: CostModel, eta: float = 1.0, k_min: int = 100, queue_ema: float = 0.05):
+        self.cost = cost
+        self.eta = eta
+        self.k_min = k_min
+        self.queue_ema = queue_ema
+        self.by_tool: dict[str, list[float]] = {}
+        self.everything: list[float] = []
+        self.queue_delay_s = 0.0  # T, initialised to zero as in the paper
+
+    def observe_queue_delay(self, delay_s: float) -> None:
+        self.queue_delay_s += self.queue_ema * (delay_s - self.queue_delay_s)
+
+    def record(self, program: str, pause_s: float) -> None:
+        self.by_tool.setdefault(program, []).append(pause_s)
+        self.everything.append(pause_s)
+
+    def ttl(self, s: Session) -> float:
+        gain = (self.queue_delay_s * self.eta + self.cost.recompute_s(s.context_tokens)
+                - self.cost.reload_s(s.context_tokens))
+        history = self.by_tool.get(s.program, [])
+        if len(history) <= self.k_min:
+            history = self.everything
+        if len(history) < 5:  # cold start: durations ~ Exp(1 s); maximise (1 - e^-tau) gain - tau
+            return math.log(gain) if gain > 1 else 0.0
+        xs = sorted(history)
+        n = len(xs)
+        best_tau, best = 0.0, 0.0
+        for i, tau in enumerate(xs):
+            value = (i + 1) / n * gain - tau
+            if value > best:
+                best_tau, best = tau, value
+        return best_tau
+
+    def on_pause(self, s: Session, now: float) -> Action:
+        s.pinned_until = now + self.ttl(s)
+        return Action.KEEP
+
+    def eviction_order(self, paused: list[Session], now: float) -> list[Session]:
+        free = sorted((s for s in paused if s.pinned_until <= now), key=lambda s: s.last_used)
+        pinned = sorted((s for s in paused if s.pinned_until > now), key=lambda s: -s.program_arrival)
+        return free + pinned
+
+    def on_return(self, s: Session, pause_s: float) -> None:
+        self.record(s.program, pause_s)
+
+
 def warm_start(policy, sessions) -> None:
-    """Seed the predictor with the pauses of training sessions (as other, earlier sessions)."""
+    """Seed a policy's pause history with the training sessions (as other, earlier sessions)."""
     for rs in sessions:
         for t in rs.turns:
-            if t.pause_s is not None:
+            if t.pause_s is None:
+                continue
+            if isinstance(policy, ContinuumPolicy):
+                policy.record(t.program, t.pause_s)
+            else:
                 policy.predictor.observe(f"train:{rs.session_id}", t.program, t.pause_s)

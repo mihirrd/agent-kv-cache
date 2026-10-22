@@ -17,11 +17,13 @@ from kvtier.cost import GATE_A_TP2, Calibration, CostModel, PredictivePolicy
 from kvtier.sessions import common_prefix_blocks, load_sessions
 from kvtier.sim.engine import SimConfig, Simulator
 from kvtier.sim.metrics import summarize, write_outputs
-from kvtier.sim.policies import (EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy, LruPolicy, OraclePolicy,
-                                 RemainingTimeEviction, TtlPinPolicy, warm_start)
+from kvtier.sim.policies import (ContinuumPolicy, EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy,
+                                 LruPolicy, OraclePolicy, RemainingTimeEviction, TtlPinPolicy, warm_start)
 
 POLICIES = ("vllm", "always-offload", "ttl-pin", "predictive", "predictive-cold", "oracle", "noisy-oracle",
-            "oracle-evict", "predictive-evict", "long-offload", "long-offload-oracle", "remaining-evict", "belady")
+            "oracle-evict", "predictive-evict", "long-offload", "long-offload-oracle", "remaining-evict", "belady",
+            "continuum", "continuum-ttl", "remaining-evict-fcfs")
+PROGRAM_FCFS = ("continuum", "remaining-evict-fcfs")  # policies run with Continuum's queue order
 DEFAULT_SESSIONS = ("traces/sessions/verified.jsonl", "traces/sessions/multilingual.jsonl")
 
 
@@ -68,7 +70,11 @@ def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, s
         return p
     if name == "long-offload-oracle":
         return LongCallOffloadPolicy(threshold_s, oracle=True)
-    if name == "remaining-evict":
+    if name in ("continuum", "continuum-ttl"):
+        p = ContinuumPolicy(cost)
+        warm_start(p, train)
+        return p
+    if name in ("remaining-evict", "remaining-evict-fcfs"):
         p = RemainingTimeEviction()
         warm_start(p, train)
         return p
@@ -89,7 +95,8 @@ def run_one(policy: str, load: float, cap: int, seed: int, opts: dict) -> dict:
     train = split(by_file, "train")
     cost = CostModel(faster_compute(GATE_A_TP2, opts["speedup"]))
     cfg = SimConfig(load_per_min=load, cap_tokens=cap, cpu_tier=policy != "vllm", prefetch=not opts["no_prefetch"],
-                    warmup_s=opts["warmup"], duration_s=opts["duration"], seed=seed)
+                    warmup_s=opts["warmup"], duration_s=opts["duration"], seed=seed,
+                    program_fcfs=policy in PROGRAM_FCFS)
     pol = make_policy(policy, cost, train, opts["ttl"], opts["noise"], seed, opts["threshold"])
     t0 = time.time()
     rec = Simulator(sessions, pol, cost, cfg, common_prefix_blocks(sessions)).run()

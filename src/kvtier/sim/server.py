@@ -28,6 +28,8 @@ class Request:
     warmup: bool = False
     prev_prompt_blocks: int = 0  # blocks of the session's previous prompt (reusable prefix)
     warmed: bool = False  # a prefetch warm-up completed during the pause before this turn
+    program_arrival: float = 0.0  # arrival of the session's first request (program-level FCFS)
+    pinned: bool = False  # the session's KV was still TTL-pinned when this request arrived
     gpu_hit: int = 0  # tokens served from GPU prefix cache
     cpu_load: int = 0  # tokens reloaded from the CPU tier
     prefilled: int = 0  # prompt tokens done, cached ones included
@@ -53,10 +55,11 @@ class StepPlan:
 
 class Server:
     def __init__(self, gpu: GpuPool, cpu: CpuTier | None, steps: StepModel, shared_blocks: int,
-                 make_room: Callable[[int, float], int]):
+                 make_room: Callable[[int, float], int], queue_key: Callable[[Request], tuple] | None = None):
         self.gpu, self.cpu, self.steps = gpu, cpu, steps
         self.shared_blocks = shared_blocks
         self.make_room = make_room  # (blocks needed, now) -> blocks freed; the policy's eviction path
+        self.queue_key = queue_key  # waiting-queue order; None = FCFS by request arrival (vLLM)
         self.waiting: deque[Request] = deque()
         self.running: list[Request] = []
 
@@ -102,6 +105,8 @@ class Server:
 
     def plan(self, now: float) -> StepPlan | None:
         budget = self.steps.cal.prefill_budget_tokens
+        if self.queue_key is not None and len(self.waiting) > 1:
+            self.waiting = deque(sorted(self.waiting, key=self.queue_key))
         decodes = [r for r in self.running if r.prefilled >= r.prompt_tokens]
         chunks, admitted = [], []
         for r in self.running:

@@ -309,6 +309,32 @@ Compared with Belady (evict who truly returns last). Full pool, 5 seeds, vs alwa
 - At 4×, 22/min it keeps 79% of returning sessions on GPU vs 74% for LRU (Belady: 90%).
 - Gains are concentrated at the memory cliff; away from it there is nothing to evict.
 
+**Head-to-head with Continuum (arXiv:2511.02230, Oct 22).** Reimplemented in the simulator from the
+paper: TTL at pause start = argmax over τ ∈ {0} ∪ past durations of P(pause ≤ τ)·(T·η + prefill − reload) − τ
+(per-tool history if > 100 records, else all tools; Exp(1) default when cold; T = running average of
+queueing delay; η = 1); pinned KV not evicted unless admission is stuck (then latest program arrival
+first); expired pins become LRU cache with the LMCache copy; queue order = pinned first, then program
+arrival. Same warm start as ours. 5 seeds. All-request goodput at 5 s vs always-offload:
+
+| Policy | 4×, 20/min | 4×, 22 | 4×, 24 | 8×, 32 | 1×, 6/min, 115K | 1×, 8/min, 146K |
+|---|---|---|---|---|---|---|
+| Continuum, TTL pinning only (returning turns) | −0.1% | −2.5% | −0.4% | 0% | 0% | 0% |
+| Continuum, full | +0.4% | +18.0% | +67.4% | +0.3% | +13.4% | +39.9% |
+| ours (remaining-evict) | +0.8% | +11.3% | +6.8% | +1.5% | 0% | −0.2% |
+| ours + Continuum's queue order | +2.0% | +30.2% | +70.5% | +2.6% | +11.8% | +34.1% |
+
+Median wait for a new session's first token at 4×, 24/min: always-offload 10.2 s, Continuum 21.2 s,
+ours + queue order 13.7 s. At 1×, 8/min: 7.0 s, 21.9 s and 17.6 s.
+
+1. **Continuum's gain comes from its queue order (program-level FCFS), not from TTL pinning.** Pinning
+   alone is 0 to −2.5%. The queue order also helps on today's compute-bound GPU, so it is relieving
+   compute congestion rather than memory.
+2. **As a memory policy, remaining-time eviction beats TTL pinning** (+7% to +11% vs ≤ 0% at 4×).
+3. **Combined with the queue order, ours is best on fast GPUs** (+30% / +71% at 4×, +2.6% at 8×) and
+   level with Continuum on today's GPU with squeezed memory (+34% vs +40%, seed ranges overlap widely).
+4. **The queue order trades new sessions' first-token wait** for returning turns under overload.
+   Report both.
+
 Caveats before treating this as final:
 - The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
   block the step; an asynchronous prefetch path (LMCache controller API) would make proactive

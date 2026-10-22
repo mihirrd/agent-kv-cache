@@ -29,6 +29,7 @@ class SimConfig:
     duration_s: float = 600.0
     drain_s: float = 120.0  # keep running after the window so in-window requests can finish
     seed: int = 0
+    program_fcfs: bool = False  # Continuum's queue order: pinned first, then by session arrival
 
 
 @dataclass(eq=False)
@@ -63,7 +64,8 @@ class Simulator:
         self.shared_blocks = shared_blocks
         self.gpu = GpuPool(cfg.cap_tokens // BLOCK)
         self.cpu = CpuTier(cfg.cpu_cap_tokens) if cfg.cpu_tier else None
-        self.server = Server(self.gpu, self.cpu, StepModel(cost), shared_blocks, self.make_room)
+        queue_key = (lambda r: (not r.pinned, r.program_arrival, r.arrival)) if cfg.program_fcfs else None
+        self.server = Server(self.gpu, self.cpu, StepModel(cost), shared_blocks, self.make_room, queue_key)
         self.rng = random.Random(cfg.seed)
         self.events: list = []
         self.seq = itertools.count()
@@ -108,7 +110,7 @@ class Simulator:
         sid = f"{rs.session_id}#{next(self.copies)}"
         salt = self.rng.getrandbits(62)
         hashes = [salt_hashes(t.block_hashes, self.shared_blocks, salt) for t in rs.turns]
-        ss = SimSession(rs, Session(sid), hashes)
+        ss = SimSession(rs, Session(sid, program_arrival=self.now), hashes)
         self.live[sid] = ss
         self.submit_turn(ss)
         if fixed is None:
@@ -149,16 +151,22 @@ class Simulator:
     def submit_turn(self, ss: SimSession) -> None:
         t = ss.replay.turns[ss.turn]
         prev = len(ss.hashes[ss.turn - 1]) if ss.turn else 0
-        ss.state.state = State.ACTIVE
+        s = ss.state
+        pinned = ss.turn > 0 and self.now < s.pinned_until
+        s.state = State.ACTIVE
+        s.pinned_until = 0.0
         self.rec.arrivals.append((self.now, ss.turn))
-        self.server.submit(Request(ss.state.session_id, ss.turn, ss.hashes[ss.turn], t.prompt_tokens,
-                                   t.output_tokens, self.now, prev_prompt_blocks=prev, warmed=ss.warmed))
+        self.server.submit(Request(s.session_id, ss.turn, ss.hashes[ss.turn], t.prompt_tokens, t.output_tokens,
+                                   self.now, prev_prompt_blocks=prev, warmed=ss.warmed,
+                                   program_arrival=s.program_arrival, pinned=pinned))
         ss.warmed = False
 
     def finish_turn(self, r: Request) -> None:
         ss = self.live[r.sid]
         t = ss.replay.turns[ss.turn]
         self.rec.requests.append(self.request_record(r))
+        if hasattr(self.policy, "observe_queue_delay"):
+            self.policy.observe_queue_delay(r.admitted - r.arrival)
         s = ss.state
         s.state = State.PAUSED
         s.last_used = self.now

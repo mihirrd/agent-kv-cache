@@ -34,6 +34,8 @@ class Session:
     last_used: float = 0.0  # end of the last request; LRU fallback order
     prediction: Prediction | None = None
     true_pause_s: float | None = None  # oracle only (simulator); never set from live traffic
+    program_arrival: float = 0.0  # when the session's first request arrived
+    pinned_until: float = 0.0  # TTL-pinning policies: KV reserved until this time
 
 
 class KVPolicy(ABC):
