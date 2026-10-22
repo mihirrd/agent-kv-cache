@@ -261,6 +261,36 @@ early frees memory nobody needs yet. LRU frees the same long-paused session unde
 early offload makes returns that could have hit GPU pay a reload. Tool-awareness can only pay through
 timing (prefetch hiding the reload) or by avoiding work (not storing short calls).
 
+**Memory-bound regime (faster compute, Oct 22).** `--speedup S` makes prefill and decode S× faster
+with the same 206K-token pool and the same CPU-reload cost (0.25 s, blocking), standing in for a
+faster GPU with the same memory. Full pool, no artificial cap, 3 seeds.
+
+Load sweep, vLLM default: at 4× the pool fills with *paused* KV (176K tokens at 8/min) while every
+returning turn meets 5 s; the cliff is between 16/min (99%) and 24/min (43%; 44% of returns find
+their KV gone). At 8× the cliff is between 24/min (100%) and 32/min (56%).
+
+Policies around the cliff, goodput vs always-offload (range over seeds):
+
+| Policy | 4×, 16/min | 4×, 20 | 4×, 24 | 8×, 24 | 8×, 28 | 8×, 32 |
+|---|---|---|---|---|---|---|
+| vLLM default | −2% | −64% | −45% | 0% | −2% | −69% |
+| **oracle, eviction order only** | +0.1% | +1.6% | **+14.6% [+11, +17]** | 0% | +0.2% | **+5.4% [0, +16]** |
+| oracle, offload + prefetch | −7% | −67% | −46% | −21% | −74% | −86% |
+| long-call offload, guess, T=5 s | 0% | −4% | +0.3% | 0% | 0% | −3% |
+| long-call offload, perfect, T=1 s | −3% | −58% | −29% | −1% | −29% | −74% |
+| predictive (any variant) | −68 to −84% | −94% | −91% | −84 to −93% | −92 to −98% | −96 to −99% |
+
+1. **Headroom exists only when memory is the bottleneck:** at the edge of the cliff, eviction order
+   with perfect pause knowledge gains 15% (4×) and 5% (8×) over LRU. That clears Gate C's 5% bar in
+   this regime. On our 2080 Tis the system is compute-bound, so real runs here cannot show it;
+   faster GPUs (spec fallback: rent one) or a memory-constrained setup would be needed.
+2. **Proactive offload hurts more on faster GPUs,** because the fixed 0.25 s blocking reload now costs
+   several batches.
+3. **The predictive eviction rule is broken, not weak.** An overdue session (paused longer than
+   predicted) gets remaining time floored at 0.1 s and is treated as about to return, so it is never
+   evicted. Ended sessions pile up the same way. With heavy-tailed pauses the opposite holds: an
+   overdue session is likely in a long pause and should be evicted first.
+
 Caveats before treating this as final:
 - The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
   block the step; an asynchronous prefetch path (LMCache controller API) would make proactive

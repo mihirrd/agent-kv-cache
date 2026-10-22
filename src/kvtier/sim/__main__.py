@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from kvtier.cost import GATE_A_TP2, CostModel, PredictivePolicy
+from kvtier.cost import GATE_A_TP2, Calibration, CostModel, PredictivePolicy
 from kvtier.sessions import common_prefix_blocks, load_sessions
 from kvtier.sim.engine import SimConfig, Simulator
 from kvtier.sim.metrics import summarize, write_outputs
@@ -34,6 +34,18 @@ def split(sessions_by_file: list[list], which: str, train_share: float = 0.8, se
         k = round(train_share * len(ordered))
         out += {"train": ordered[:k], "holdout": ordered[k:], "all": ordered}[which]
     return out
+
+
+def faster_compute(cal: Calibration, speedup: float) -> Calibration:
+    """A GPU `speedup` times faster at prefill and decode, with the same KV memory and CPU-reload cost."""
+    if speedup == 1:
+        return cal
+    return dataclasses.replace(
+        cal,
+        prefill_points=tuple((t, s / speedup) for t, s in cal.prefill_points),
+        decode_base_s=cal.decode_base_s / speedup,
+        decode_per_request_s=cal.decode_per_request_s / speedup,
+    )
 
 
 def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, seed: int, threshold_s: float = 5.0):
@@ -69,7 +81,7 @@ def run_one(policy: str, load: float, cap: int, seed: int, opts: dict) -> dict:
     by_file = [load_sessions(Path(p))[0] for p in opts["sessions"]]
     sessions = split(by_file, opts["split"])
     train = split(by_file, "train")
-    cost = CostModel(GATE_A_TP2)
+    cost = CostModel(faster_compute(GATE_A_TP2, opts["speedup"]))
     cfg = SimConfig(load_per_min=load, cap_tokens=cap, cpu_tier=policy != "vllm", prefetch=not opts["no_prefetch"],
                     warmup_s=opts["warmup"], duration_s=opts["duration"], seed=seed)
     pol = make_policy(policy, cost, train, opts["ttl"], opts["noise"], seed, opts["threshold"])
@@ -102,14 +114,15 @@ def main() -> None:
     ap.add_argument("--ttl", type=float, default=5.0, help="TTL-pin seconds")
     ap.add_argument("--noise", type=float, default=0.5, help="noisy-oracle relative error")
     ap.add_argument("--threshold", type=float, default=5.0, help="long-offload: pauses longer than this are long")
+    ap.add_argument("--speedup", type=float, default=1.0, help="prefill and decode this many times faster (same memory)")
     ap.add_argument("--no-prefetch", action="store_true")
     ap.add_argument("--warmup", type=float, default=120.0)
     ap.add_argument("--duration", type=float, default=600.0)
     ap.add_argument("--out", default="results/sim")
     ap.add_argument("--workers", type=int, default=14)
     args = ap.parse_args()
-    opts = {k: getattr(args, k) for k in ("sessions", "split", "ttl", "noise", "threshold", "no_prefetch", "warmup",
-                                          "duration", "out")}
+    opts = {k: getattr(args, k) for k in ("sessions", "split", "ttl", "noise", "threshold", "speedup", "no_prefetch",
+                                          "warmup", "duration", "out")}
     grid = [(p, l, c, s) for p in args.policy for l in args.load for c in args.cap for s in args.seed]
     if args.mode == "run" and len(grid) > 1:
         ap.error("run takes one value per option; use sweep for a grid")
