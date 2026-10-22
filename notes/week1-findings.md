@@ -191,6 +191,63 @@ Tool pauses, 203 tool calls:
 
 Docker images for the 70 tasks use ~60 GB; 282 GB free afterwards.
 
+## Gate C in the simulator (Oct 22): FAILS with placeholder calibration
+
+Simulator `kvtier/sim` (commit a9dc30b), training split (56 traces), placeholder calibration
+`GATE_A_TP2` (reload overhead 0.25 s and blocking; decode 25 ms + 0.5 ms/request). Goodput =
+returning turns with TTFT ≤ 5 s per second. Mean of 3 seeds; results in gpubox `results/sim/`.
+
+**Load range (vLLM default, full 206K pool).** The server saturates at ~8 sessions/min. As load
+rises, running requests take the pool and paused-session KV shrinks:
+
+| Load (/min) | Returning ≤ 5 s | KV in use (running) | KV held by paused sessions |
+|---|---|---|---|
+| 4 | 100% | 35K | 109K |
+| 6 | 98% | 72K | 86K |
+| 8 | 83% | 123K | 46K |
+| 10 | 70% | 153K | 25K |
+| 12 | 55% | 171K | 13K |
+| 16 | 36% | 186K | 4K |
+
+The agreed tight-cap rule (half the paused KV at the middle load) gives 12.5K tokens at 10/min, below
+the 153K the running requests need, so it is infeasible. The runs below used loads 4, 6 and 8 with the
+cap per load = KV in use + half the paused KV (89K, 115K, 146K). **This changes an agreed decision and
+needs the user's sign-off.**
+
+**Goodput relative to always-offload at the tight cap:**
+
+| Policy | Load 4 | Load 6 | Load 8 |
+|---|---|---|---|
+| always-offload (abs.) | 0.489 | 0.551 | 0.451 |
+| vLLM default (no CPU tier) | −19% | −17% | −15% |
+| oracle (C3 rules + prefetch) | −10% | −8% | −8% |
+| oracle-evict (eviction order only) | −2% | −0% | −2% |
+| predictive (warm start) | −44% | −61% | −49% |
+| predictive-evict | −42% | −63% | −52% |
+
+Fallbacks (compiled-language traces only, caps 60K–100K, loads 4 and 6): oracle −2% to −17%,
+oracle-evict −4% to +2%. **No cell reaches the +5% bar.**
+
+What the numbers show:
+1. **The CPU tier is worth 15–20%** over vLLM default (up to 60% on build-heavy traces at tight caps).
+2. **Knowing pause lengths adds nothing to eviction order.** LRU evicts the session paused longest;
+   with heavy-tailed pauses that session is very likely still in a long pause, so LRU picks nearly
+   the oracle's victim.
+3. **Proactive offload + warm-up prefetch costs more than it saves.** Each warm-up blocks a step for
+   the 0.25 s reload overhead and re-prefills up to 255 tokens.
+4. **The predictive policy's "low-confidence first, by LRU" eviction rule is harmful.** It evicts
+   sessions paused milliseconds ago, which return at once (30–58% of returns come from CPU vs 8–43%).
+5. **The server is compute-bound** where memory pressure exists; returning TTFT is dominated by
+   queueing and prefill of new tokens.
+
+Caveats before treating this as final:
+- The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
+  block the step; an asynchronous prefetch path (LMCache controller API) would make proactive
+  offload cheaper.
+- The simulator is not yet validated against real runs (Gate D).
+- TTL-pin as implemented equals LRU (a session's last use equals its pause start). A real pin must
+  refuse to evict pinned sessions.
+
 ## Implementation status (end of Oct 20)
 
 | Component | Status |
