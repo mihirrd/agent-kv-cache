@@ -191,14 +191,45 @@ Tool pauses, 203 tool calls:
 
 Docker images for the 70 tasks use ~60 GB; 282 GB free afterwards.
 
-## Gate C in the simulator (Oct 22): FAILS with placeholder calibration
+## Oct 22: simulator, Gate C, and a new direction
 
-Simulator `kvtier/sim` (commit a9dc30b), training split (56 traces), placeholder calibration
-`GATE_A_TP2` (reload overhead 0.25 s and blocking; decode 25 ms + 0.5 ms/request). Goodput =
-returning turns with TTFT ≤ 5 s per second. Mean of 3 seeds; results in gpubox `results/sim/`.
+Simulator `kvtier/sim` on the 56-trace training split, placeholder calibration `GATE_A_TP2` (reload
+overhead 0.25 s that blocks the batch; decode 25 ms + 0.5 ms per request). "Goodput" = requests per
+second whose time to first token is ≤ 5 s. All results are simulated; raw outputs in gpubox
+`results/sim/`.
 
-**Load range (vLLM default, full 206K pool).** The server saturates at ~8 sessions/min. As load
-rises, running requests take the pool and paused-session KV shrinks:
+### In short
+
+1. **On our 2080 Tis the server runs out of compute before memory.** Paused sessions only crowd the
+   GPU at loads it can already barely serve, so memory policies have little to act on.
+2. **Moving memory early does not pay:** proactive offload, warm-up prefetch and "offload the long
+   calls" all lose to always-offload, even with perfect knowledge of pause lengths.
+3. **When memory is the bottleneck (simulated faster GPU), choosing *whom to evict* pays.** Evicting
+   the session expected to stay away longest gains up to +11% and never loses; a perfect guesser
+   gains up to +34%.
+4. **Continuum's gain comes from its queue order, not its memory reservation.** As a memory policy,
+   ours beats its TTL pinning; combined with its queue order, ours is best on fast GPUs.
+
+### Decisions
+
+| Decision | Why | Status |
+|---|---|---|
+| Headline SLO: 5 s TTFT; also report 2 s and 10 s | a fully cached 16K turn still takes ~3.5 s (Gate B) | agreed |
+| Always-offload baseline keeps KV on GPU until pressure, reloads from the LMCache copy | LMCache's default; the stronger baseline | agreed |
+| Headline: returning-turn goodput, all-request goodput beside it | returning turns are what a KV policy can help; all-request keeps it honest | agreed |
+| Predictor reported warm-started (main) and cold | a deployed system has history | agreed |
+| Policies evict whole sessions | a partial prefix is mostly useless; Gate D will measure the gap to vLLM | agreed |
+| Tight cap = KV in use + half the paused KV, per load (89K / 115K / 146K at 4 / 6 / 8 per min) | the agreed rule (half the paused KV at the middle load) gives 12.5K tokens, below what running requests need | **pending user sign-off** |
+| Prefetch set aside for now | user's call; warm-ups also lost in every test | agreed |
+| "Offload long calls early" rejected | loses even with a perfect long/short guess | from the data |
+| **New direction: treat it as a caching policy.** Keep everything while there is room; when space runs out, evict the session expected to stay away longest | the gain is in knowing *what to evict*, not what to keep (user's direction) | adopted |
+| Simulate faster GPUs (`--speedup`) as a stand-in for memory-bound hardware | our GPUs are compute-bound | adopted |
+| Compare against Continuum (arXiv:2511.02230) in the simulator | closest prior work; it was already the spec's baseline | done |
+
+### Finding 1: on today's GPUs, compute runs out first
+
+Load sweep, vLLM default, full 206K pool. As load rises, running requests take the pool and paused
+sessions get squeezed out:
 
 | Load (/min) | Returning ≤ 5 s | KV in use (running) | KV held by paused sessions |
 |---|---|---|---|
@@ -209,42 +240,30 @@ rises, running requests take the pool and paused-session KV shrinks:
 | 12 | 55% | 171K | 13K |
 | 16 | 36% | 186K | 4K |
 
-The agreed tight-cap rule (half the paused KV at the middle load) gives 12.5K tokens at 10/min, below
-the 153K the running requests need, so it is infeasible. The runs below used loads 4, 6 and 8 with the
-cap per load = KV in use + half the paused KV (89K, 115K, 146K). **This changes an agreed decision and
-needs the user's sign-off.**
+Gate C as specified (oracle beats always-offload by ≥ 5%) **fails** at the tight caps:
 
-**Goodput relative to always-offload at the tight cap:**
-
-| Policy | Load 4 | Load 6 | Load 8 |
+| Policy | Load 4, 89K | Load 6, 115K | Load 8, 146K |
 |---|---|---|---|
-| always-offload (abs.) | 0.489 | 0.551 | 0.451 |
-| vLLM default (no CPU tier) | −19% | −17% | −15% |
+| always-offload (absolute) | 0.489 | 0.551 | 0.451 |
+| vLLM default (no CPU copy) | −19% | −17% | −15% |
 | oracle (C3 rules + prefetch) | −10% | −8% | −8% |
-| oracle-evict (eviction order only) | −2% | −0% | −2% |
+| oracle, eviction order only | −2% | −0% | −2% |
 | predictive (warm start) | −44% | −61% | −49% |
-| predictive-evict | −42% | −63% | −52% |
 
-Fallbacks (compiled-language traces only, caps 60K–100K, loads 4 and 6): oracle −2% to −17%,
-oracle-evict −4% to +2%. **No cell reaches the +5% bar.**
+The fallbacks (build-heavy traces only, caps 60K–100K) also stay between −17% and +2%.
 
-What the numbers show:
-1. **The CPU tier is worth 15–20%** over vLLM default (up to 60% on build-heavy traces at tight caps).
-2. **Knowing pause lengths adds nothing to eviction order.** LRU evicts the session paused longest;
-   with heavy-tailed pauses that session is very likely still in a long pause, so LRU picks nearly
-   the oracle's victim.
-3. **Proactive offload + warm-up prefetch costs more than it saves.** Each warm-up blocks a step for
-   the 0.25 s reload overhead and re-prefills up to 255 tokens.
-4. **The predictive policy's "low-confidence first, by LRU" eviction rule is harmful.** It evicts
-   sessions paused milliseconds ago, which return at once (30–58% of returns come from CPU vs 8–43%).
-5. **The server is compute-bound** where memory pressure exists; returning TTFT is dominated by
-   queueing and prefill of new tokens.
+- The CPU copy (LMCache) alone is worth 15–20% over vLLM default.
+- LRU already picks nearly the oracle's victim. With heavy-tailed pauses, the session paused longest
+  is almost always in a long pause.
+- Each warm-up blocks a step for the 0.25 s reload and re-prefills up to 255 tokens, so prefetch costs
+  more than it saves.
 
-**Long-call offload (user's idea, Oct 22).** Classify each tool call as long or short when its pause starts
-(predicted p50 > T, or the true pause for an upper bound); offload long ones at once, keep short ones;
-LRU eviction; no prefetch. Thresholds T = 1, 2, 5, 10 s; same loads and caps; 3 seeds.
+### Finding 2: offloading long calls early does not help
 
-| Load, cap | Guess T=1 | T=5 | T=10 | Perfect T=1 | T=5 | T=10 |
+Classify each tool call as long or short when its pause starts (predicted median > T, or the true
+pause for an upper bound); offload long ones immediately; LRU otherwise; no prefetch. 3 seeds.
+
+| Load, cap | Guess T=1 s | T=5 s | T=10 s | Perfect T=1 s | T=5 s | T=10 s |
 |---|---|---|---|---|---|---|
 | 4, tight | −5.0% | −0.2% | −0.7% | −5.4% | −3.0% | −1.6% |
 | 6, tight | −3.1% | +0.1% | −0.2% | −5.3% | −1.5% | −0.7% |
@@ -252,106 +271,114 @@ LRU eviction; no prefetch. Thresholds T = 1, 2, 5, 10 s; same loads and caps; 3 
 | 6, full | −0.9% | +0.5% | +0.6% | −4.0% | −1.0% | +0.1% |
 | 8, full | −8.1% | −2.8% | −1.6% | −11.2% | −5.3% | −4.7% |
 
-Guess quality at load 6, tight cap: for T = 1 s, 21% of pauses are long; precision 86%, recall 46%.
-For T = 10 s, 5% are long; precision 50%, recall 12%.
+Guess quality (load 6, tight cap): for T = 1 s, 21% of pauses are long, precision 86%, recall 46%;
+for T = 10 s, 5% are long, precision 50%, recall 12%.
 
-More offloading is consistently worse, even with a perfect guess. Every finished turn is already
-stored to CPU and a paused session's GPU blocks are reclaimed instantly when needed, so offloading
-early frees memory nobody needs yet. LRU frees the same long-paused session under pressure, while
-early offload makes returns that could have hit GPU pay a reload. Tool-awareness can only pay through
-timing (prefetch hiding the reload) or by avoiding work (not storing short calls).
+Why it loses: every finished turn is already copied to CPU, and a paused session's GPU memory is
+handed to a new request the moment it is needed. Offloading early frees memory nobody needs yet, and
+turns returns that could have hit GPU into reloads.
 
-**Memory-bound regime (faster compute, Oct 22).** `--speedup S` makes prefill and decode S× faster
-with the same 206K-token pool and the same CPU-reload cost (0.25 s, blocking), standing in for a
-faster GPU with the same memory. Full pool, no artificial cap, 3 seeds.
+### Finding 3: when memory is the bottleneck, eviction order matters
 
-Load sweep, vLLM default: at 4× the pool fills with *paused* KV (176K tokens at 8/min) while every
-returning turn meets 5 s; the cliff is between 16/min (99%) and 24/min (43%; 44% of returns find
-their KV gone). At 8× the cliff is between 24/min (100%) and 32/min (56%).
+`--speedup S` makes prefill and decode S× faster with the same 206K-token pool and the same reload
+cost. With 4× compute the pool fills with *paused* KV (176K tokens at 8/min) while every request is
+on time; the cliff where memory runs out is between 16/min and 24/min. With 8×, between 24 and 32/min.
 
-Policies around the cliff, goodput vs always-offload (range over seeds):
+Eviction-only oracle vs always-offload: +14.6% at 4×, 24/min (seeds +11% to +17%); +5.4% at 8×,
+32/min. Proactive offload + prefetch loses badly here (−46% to −86%), because the fixed reload now
+costs several batches. The first predictive rule (C3 score, "low-confidence first") lost 68–99%: it
+treated overdue sessions as about to return and never evicted them.
 
-| Policy | 4×, 16/min | 4×, 20 | 4×, 24 | 8×, 24 | 8×, 28 | 8×, 32 |
-|---|---|---|---|---|---|---|
-| vLLM default | −2% | −64% | −45% | 0% | −2% | −69% |
-| **oracle, eviction order only** | +0.1% | +1.6% | **+14.6% [+11, +17]** | 0% | +0.2% | **+5.4% [0, +16]** |
-| oracle, offload + prefetch | −7% | −67% | −46% | −21% | −74% | −86% |
-| long-call offload, guess, T=5 s | 0% | −4% | +0.3% | 0% | 0% | −3% |
-| long-call offload, perfect, T=1 s | −3% | −58% | −29% | −1% | −29% | −74% |
-| predictive (any variant) | −68 to −84% | −94% | −91% | −84 to −93% | −92 to −98% | −96 to −99% |
+### Finding 4: remaining-time eviction (our caching policy)
 
-1. **Headroom exists only when memory is the bottleneck:** at the edge of the cliff, eviction order
-   with perfect pause knowledge gains 15% (4×) and 5% (8×) over LRU. That clears Gate C's 5% bar in
-   this regime. On our 2080 Tis the system is compute-bound, so real runs here cannot show it;
-   faster GPUs (spec fallback: rent one) or a memory-constrained setup would be needed.
-2. **Proactive offload hurts more on faster GPUs,** because the fixed 0.25 s blocking reload now costs
-   several batches.
-3. **The predictive eviction rule is broken, not weak.** An overdue session (paused longer than
-   predicted) gets remaining time floored at 0.1 s and is treated as about to return, so it is never
-   evicted. Ended sessions pile up the same way. With heavy-tailed pauses the opposite holds: an
-   overdue session is likely in a long pause and should be evicted first.
-
-**Remaining-time eviction, a caching policy (user's direction, Oct 22).** Keep everything while there
-is room; when space runs out, evict the paused session expected to stay away longest. Expected time
-left = median of (x − elapsed) over past pauses x of the same tool that lasted longer than this pause
-so far (C2 back-off keys; infinite if none lasted that long). Return reloads from CPU via LMCache.
-Compared with Belady (evict who truly returns last). Full pool, 5 seeds, vs always-offload:
+Keep everything while there is room. When space runs out, evict the paused session expected to stay
+away longest. Expected time left = median of (x − elapsed) over past pauses x of the same tool that
+lasted longer than this pause so far (back-off: session+tool → tool → category → all; infinite if
+none lasted that long). Returns reload from the LMCache copy. Full pool, 5 seeds, returning-turn
+goodput vs always-offload:
 
 | Policy | 4×, 18/min | 4×, 20 | 4×, 22 | 4×, 24 | 8×, 30 | 8×, 32 |
 |---|---|---|---|---|---|---|
-| always-offload (abs.) | 2.87/s | 3.02/s | 2.30/s | 1.61/s | 4.96/s | 5.09/s |
-| **ours (remaining-evict)** | +0.3% | +0.9% | **+11.4% [+1, +30]** | **+7.4% [+1, +15]** | +0.1% | +1.5% [0, +7] |
-| perfect (Belady) | +0.3% | +1.4% | +33.9% [+1, +74] | +12.9% [+4, +22] | +0.3% | +3.5% [0, +16] |
+| always-offload (absolute) | 2.87/s | 3.02/s | 2.30/s | 1.61/s | 4.96/s | 5.09/s |
+| **ours** | +0.3% | +0.9% | **+11.4% [+1, +30]** | **+7.4% [+1, +15]** | +0.1% | +1.5% [0, +7] |
+| perfect (Belady: evict who returns last) | +0.3% | +1.4% | +33.9% [+1, +74] | +12.9% [+4, +22] | +0.3% | +3.5% [0, +16] |
 | vLLM default | −9% | −45% | −46% | −41% | −25% | −51% |
 
-- **First tool-aware policy that never loses:** its worst seed in every cell is ≥ 0%, and it gains
-  where memory runs out. It captures about a third (22/min) to half (24/min) of Belady's gain.
-- At 4×, 22/min it keeps 79% of returning sessions on GPU vs 74% for LRU (Belady: 90%).
-- Gains are concentrated at the memory cliff; away from it there is nothing to evict.
+- The first tool-aware policy that never loses: its worst seed is ≥ 0% in every cell.
+- It captures a third (22/min) to half (24/min) of the perfect guesser's gain. At 4×, 22/min it keeps
+  79% of returning sessions on GPU, against 74% for LRU and 90% for Belady.
+- Gains sit at the memory cliff; below it nothing is evicted, above it the GPU is overloaded anyway.
+- On today's GPU with squeezed memory it ties with always-offload (compute-bound).
 
-**Head-to-head with Continuum (arXiv:2511.02230, Oct 22).** Reimplemented in the simulator from the
-paper: TTL at pause start = argmax over τ ∈ {0} ∪ past durations of P(pause ≤ τ)·(T·η + prefill − reload) − τ
-(per-tool history if > 100 records, else all tools; Exp(1) default when cold; T = running average of
-queueing delay; η = 1); pinned KV not evicted unless admission is stuck (then latest program arrival
-first); expired pins become LRU cache with the LMCache copy; queue order = pinned first, then program
-arrival. Same warm start as ours. 5 seeds. All-request goodput at 5 s vs always-offload:
+### Finding 5: head-to-head with Continuum
+
+**What Continuum does** ("Continuum: Efficient and Robust Multi-Turn LLM Agent Scheduling with KV
+Cache Time-to-Live", Li et al., arXiv:2511.02230; vLLM 0.10.2 + LMCache 0.3.7; A100/H100/B200;
+mini-SWE-agent SWE-bench and BFCL traces):
+
+1. **Reserve memory for a set time (TTL).** When an agent starts a tool call, its KV is pinned. The
+   TTL is chosen once, at pause start: the τ that maximises P(pause ≤ τ) × (T·η + prefill − reload) − τ,
+   where P comes from past durations of that tool (all tools if it has ≤ 100 records) and T is the
+   average queueing delay. While pinned, nobody else may use that memory. If the queue is stuck,
+   pinned sessions are evicted latest-arriving first.
+2. **Change the queue order.** Serve requests by when their agent session first arrived, pinned
+   sessions first. In effect it finishes started agents before taking on new ones.
+3. It compares against vLLM with end-of-turn eviction and other research systems, not against LRU
+   prefix caching or an oracle, and does not discuss compute- vs memory-bound regimes. No prefetch.
+
+**How we differ:** we reserve nothing; we only choose whom to evict when space runs out, and we update
+the guess as the pause goes on (an agent gone longer than usual is evicted first). We compare against
+vLLM's LRU prefix cache with the LMCache copy and against a perfect guesser, and we leave the queue
+order alone unless stated.
+
+**Results** (our reimplementation; η = 1; same warm start for both; 5 seeds). All-request goodput at
+5 s vs always-offload:
 
 | Policy | 4×, 20/min | 4×, 22 | 4×, 24 | 8×, 32 | 1×, 6/min, 115K | 1×, 8/min, 146K |
 |---|---|---|---|---|---|---|
-| Continuum, TTL pinning only (returning turns) | −0.1% | −2.5% | −0.4% | 0% | 0% | 0% |
+| Continuum, pinning only (returning turns) | −0.1% | −2.5% | −0.4% | 0% | 0% | 0% |
 | Continuum, full | +0.4% | +18.0% | +67.4% | +0.3% | +13.4% | +39.9% |
-| ours (remaining-evict) | +0.8% | +11.3% | +6.8% | +1.5% | 0% | −0.2% |
+| ours | +0.8% | +11.3% | +6.8% | +1.5% | 0% | −0.2% |
 | ours + Continuum's queue order | +2.0% | +30.2% | +70.5% | +2.6% | +11.8% | +34.1% |
 
-Median wait for a new session's first token at 4×, 24/min: always-offload 10.2 s, Continuum 21.2 s,
-ours + queue order 13.7 s. At 1×, 8/min: 7.0 s, 21.9 s and 17.6 s.
+Median wait for a new session's first token: at 4×, 24/min always-offload 10.2 s, Continuum 21.2 s,
+ours + queue order 13.7 s; at 1×, 8/min 7.0 s, 21.9 s and 17.6 s.
 
-1. **Continuum's gain comes from its queue order (program-level FCFS), not from TTL pinning.** Pinning
-   alone is 0 to −2.5%. The queue order also helps on today's compute-bound GPU, so it is relieving
-   compute congestion rather than memory.
-2. **As a memory policy, remaining-time eviction beats TTL pinning** (+7% to +11% vs ≤ 0% at 4×).
-3. **Combined with the queue order, ours is best on fast GPUs** (+30% / +71% at 4×, +2.6% at 8×) and
-   level with Continuum on today's GPU with squeezed memory (+34% vs +40%, seed ranges overlap widely).
-4. **The queue order trades new sessions' first-token wait** for returning turns under overload.
-   Report both.
+1. **Continuum's gain comes from its queue order.** Pinning alone is 0 to −2.5%. The queue order also
+   helps on today's compute-bound GPU, so it relieves compute congestion rather than memory.
+2. **As a memory policy, ours beats pinning:** +7% to +11% vs ≤ 0% at 4×.
+3. **Ours + their queue order is best on fast GPUs** (+30% / +71% at 4×, +2.6% at 8×) and level with
+   Continuum on today's GPU with squeezed memory (+34% vs +40%; seed ranges overlap widely).
+4. **The queue order makes new agents wait longer under overload.** Any write-up must report both.
 
-Caveats before treating this as final:
-- The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
-  block the step; an asynchronous prefetch path (LMCache controller API) would make proactive
-  offload cheaper.
-- The simulator is not yet validated against real runs (Gate D).
-- TTL-pin as implemented equals LRU (a session's last use equals its pause start). A real pin must
-  refuse to evict pinned sessions.
+Possible framing for the project: remaining-time eviction is our contribution; we show Continuum's
+gain comes from scheduling rather than pinning; the two combine.
 
-## Implementation status (end of Oct 20)
+### Caveats and open items
+
+- **Placeholder calibration.** Reload overhead (0.25 s, blocking) and decode speed are estimates; week
+  2 calibration must measure them, including whether a reload stalls the batch.
+- **Not validated.** The simulator has not been compared with real runs (Gate D).
+- **Faster GPUs are simulated.** On our 2080 Tis memory does not run out before compute, so real runs
+  here cannot show the eviction gain; that needs faster (rented) GPUs or a memory-squeezed setup.
+- **Continuum rebuilt from the paper.** Its text was read through a paraphrasing tool; η fixed at 1.
+- **Room to improve the guess:** ours gets a third to half of Belady's gain. Using the command
+  (test target, directory) rather than only the program name is the obvious next step.
+- **Superseded code:** `TtlPinPolicy` equals LRU (kept only for reference; `ContinuumPolicy` replaces
+  it). The C3 `PredictivePolicy` eviction rule is broken (overdue sessions never evicted); remaining-time
+  eviction replaces it.
+
+## Implementation status (end of Oct 22)
 
 | Component | Status |
 |---|---|
 | `scripts/run_vllm.sh` | TP=2 default, LMCache CPU offload, `PYTHONHASHSEED=0` |
 | C1 hook | scheduler logs `vllm_xargs` session ID (`KVTIER_LOG_SESSIONS=1`) |
-| C2 `kvtier/predictor.py` | back-off keys, ring buffer 50, p10/p50/p90, confidence rule; tested |
-| C3 `kvtier/cost.py` | interpolated prefill cost, KEEP/OFFLOAD/DISCARD, eviction score, prefetch time; placeholder calibration from Gate A; tested |
+| C2 `kvtier/predictor.py` | back-off keys, ring buffer 50, p10/p50/p90, confidence rule, `remaining()` time-left estimate; tested |
+| C3 `kvtier/cost.py` | interpolated prefill cost, KEEP/OFFLOAD/DISCARD, eviction score, prefetch lead; superseded for eviction by remaining-time eviction |
 | `kvtier/policy.py` | `KVPolicy` interface shared by the simulator and vLLM; methods take `now` |
-| C5 `kvtier/recorder.py` | done; 70 traces recorded (50 Verified, 20 Multilingual compiled) |
-| C7 simulator | next |
-| Gate C (headroom) | after the simulator, on an 80% training split of traces |
+| C5 `kvtier/recorder.py` | 70 traces recorded (50 Verified, 20 Multilingual compiled) |
+| `kvtier/sessions.py` | traces → replay sessions (Qwen block-hash chains), shared with C6 |
+| C7 `kvtier/sim/` | done: LRU, always-offload, oracles, long-call offload, remaining-time eviction, Belady, Continuum; `--speedup`; 68 tests |
+| Gate C | fails on today's GPUs; passes for eviction order in the simulated memory-bound regime |
+| C6 harness, calibration, C1 eviction in vLLM, Gate D | week 2 |
