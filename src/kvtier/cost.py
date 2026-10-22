@@ -6,6 +6,7 @@ from kvtier.policy import Action, KVPolicy, Session, State
 from kvtier.predictor import PausePredictor
 
 KV_BYTES_PER_TOKEN_QWEN7B = 28 * 4 * 128 * 2 * 2  # layers x KV heads x head dim x (K, V) x fp16 = 57,344
+LMCACHE_CHUNK = 256  # tokens per LMCache chunk
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,9 @@ class Calibration:
     bandwidth_gb_s: float  # CPU <-> GPU KV transfer
     reload_overhead_s: float = 0.0  # fixed per-reload cost beyond the transfer
     kv_bytes_per_token: int = KV_BYTES_PER_TOKEN_QWEN7B
+    decode_base_s: float = 0.025  # decode step time = base + per_request x running decodes (placeholder)
+    decode_per_request_s: float = 0.0005
+    prefill_budget_tokens: int = 2048  # vLLM chunked-prefill token budget per step
 
 
 # Placeholder from the Gate A measurements (7B-AWQ, TP=2, TRITON_ATTN, 2026-10-20).
@@ -51,17 +55,32 @@ class CostModel:
     def offload_round_trip_s(self, tokens: int) -> float:
         return self.transfer_s(tokens) + self.reload_s(tokens)
 
+    def warmup_s(self, tokens: int) -> float:
+        """A prefetch warm-up's cost: reload the stored chunks + recompute the partial last chunk
+        (LMCache stores whole 256-token chunks only; worst case one chunk)."""
+        tail = min(LMCACHE_CHUNK, tokens)
+        return self.reload_s(tokens) + self.recompute_s(tokens) - self.recompute_s(tokens - tail)
+
 
 class PredictivePolicy(KVPolicy):
     """Tool-aware placement: predicted pause vs offload/recompute cost (SPEC.md C3, C4)."""
 
-    def __init__(self, cost: CostModel, predictor: PausePredictor | None = None, min_remaining_s: float = 0.1):
+    def __init__(self, cost: CostModel, predictor: PausePredictor | None = None, min_remaining_s: float = 0.1,
+                 prefetch_margin_s: float = 0.1):
         self.cost = cost
         self.predictor = predictor or PausePredictor()
         self.min_remaining_s = min_remaining_s
+        self.prefetch_margin_s = prefetch_margin_s  # slack for queueing behind other requests
+
+    def prefetch_lead_s(self, s: Session) -> float:
+        return self.cost.warmup_s(s.context_tokens) + self.prefetch_margin_s
+
+    def predict(self, s: Session):
+        """Pause prediction for a session starting a pause; the oracle overrides this."""
+        return self.predictor.predict(s.session_id, s.program)
 
     def on_pause(self, s: Session, now: float) -> Action:
-        s.prediction = self.predictor.predict(s.session_id, s.program)
+        s.prediction = self.predict(s)
         if s.prediction is None or not s.prediction.confident:
             return Action.KEEP  # unknown pause: behave like vLLM and let eviction_order decide
         if s.prediction.p90 < self.cost.offload_round_trip_s(s.context_tokens):
@@ -78,8 +97,8 @@ class PredictivePolicy(KVPolicy):
         )
 
     def in_return_window(self, s: Session, now: float) -> bool:
-        """Confident session whose predicted return (p10) is closer than a reload: evicting it now would hurt."""
-        return now >= s.pause_start + s.prediction.p10 - self.cost.reload_s(s.context_tokens)
+        """Confident session whose predicted return (p10) is closer than a warm-up: evicting it now would hurt."""
+        return now >= s.pause_start + s.prediction.p10 - self.prefetch_lead_s(s)
 
     def eviction_order(self, paused: list[Session], now: float) -> list[Session]:
         # Low-confidence sessions first in LRU order (vLLM's default), then confident ones by score;
@@ -93,7 +112,7 @@ class PredictivePolicy(KVPolicy):
     def prefetch_at(self, s: Session) -> float | None:
         if s.state is not State.OFFLOADED or not (s.prediction and s.prediction.confident):
             return None
-        return s.pause_start + s.prediction.p10 - self.cost.reload_s(s.context_tokens)
+        return s.pause_start + s.prediction.p10 - self.prefetch_lead_s(s)
 
     def on_return(self, s: Session, pause_s: float) -> None:
         self.predictor.observe(s.session_id, s.program, pause_s)

@@ -66,7 +66,7 @@ def test_eviction_order():
     order = [s.session_id for s in pol.eviction_order([short, unsure_new, long, unsure_old], now=101.0)]
     # Unsure sessions first by LRU; then the long pause (holds memory longest per second saved).
     assert order == ["unsure_old", "unsure_new", "long", "short"]
-    # At t=129.9 the pytest session is inside its return window (p10 30 s - 0.22 s reload) and goes last.
+    # At t=129.9 the pytest session is inside its return window (p10 30 s - 0.576 s warm-up) and goes last.
     assert pol.in_return_window(short, 129.9)
     assert [s.session_id for s in pol.eviction_order([short, long], now=129.9)] == ["long", "short"]
 
@@ -87,7 +87,8 @@ def test_prefetch_only_for_confident_offloaded():
     pol.on_pause(s, 100.0)
     assert pol.prefetch_at(s) is None  # still on GPU
     s.state = State.OFFLOADED
-    assert pol.prefetch_at(s) == pytest.approx(100.0 + 10.0 - 0.22)
+    # lead = reload 0.22 s + recompute of the last 256-token chunk (8.0 - 7.744 s) + 0.1 s margin
+    assert pol.prefetch_at(s) == pytest.approx(100.0 + 10.0 - (0.22 + 0.256 + 0.1))
 
 
 def test_on_return_feeds_predictor():
