@@ -219,7 +219,7 @@ second whose time to first token is ≤ 5 s. All results are simulated; raw outp
 | Headline: returning-turn goodput, all-request goodput beside it | returning turns are what a KV policy can help; all-request keeps it honest | agreed |
 | Predictor reported warm-started (main) and cold | a deployed system has history | agreed |
 | Policies evict whole sessions | a partial prefix is mostly useless; Gate D will measure the gap to vLLM | agreed |
-| Tight cap = KV in use + half the paused KV, per load (89K / 115K / 146K at 4 / 6 / 8 per min) | the agreed rule (half the paused KV at the middle load) gives 12.5K tokens, below what running requests need | **pending user sign-off** |
+| Tight cap = KV in use + half the paused KV, per load (89K / 115K / 146K at 4 / 6 / 8 per min) | the agreed rule (half the paused KV at the middle load) gives 12.5K tokens, below what running requests need | agreed (Oct 22) |
 | Prefetch set aside for now | user's call; warm-ups also lost in every test | agreed |
 | "Offload long calls early" rejected | loses even with a perfect long/short guess | from the data |
 | **New direction: treat it as a caching policy.** Keep everything while there is room; when space runs out, evict the session expected to stay away longest | the gain is in knowing *what to evict*, not what to keep (user's direction) | adopted |
