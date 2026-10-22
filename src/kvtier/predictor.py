@@ -59,6 +59,17 @@ class PausePredictor:
         for key in self.keys(session_id, program):
             self._buffers.setdefault(key, deque(maxlen=self.window)).append(pause_s)
 
+    def remaining(self, session_id: str, program: str, elapsed: float) -> float | None:
+        """Expected time left in a pause that has already lasted `elapsed` seconds: the median of
+        (x - elapsed) over past pauses x longer than `elapsed`, from the first back-off key with
+        enough samples. Infinite when no past pause ran this long; None with no history at all."""
+        for key in self.keys(session_id, program):
+            buf = self._buffers.get(key)
+            if buf is not None and len(buf) >= self.min_samples:
+                left = sorted(x - elapsed for x in buf if x > elapsed)
+                return percentile(left, 0.5) if left else float("inf")
+        return None
+
     def predict(self, session_id: str, program: str) -> Prediction | None:
         for key in self.keys(session_id, program):
             buf = self._buffers.get(key)

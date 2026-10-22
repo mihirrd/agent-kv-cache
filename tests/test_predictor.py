@@ -63,3 +63,14 @@ def test_confidence_rule():
     for x in (0.0, 0.0, 0.0, 0.0, 0.0):
         p.observe("zero", "echo", x)
     assert p.predict("zero", "echo").confident  # all-zero pauses: no spread, no division by zero
+
+
+def test_remaining_time_given_elapsed():
+    p = PausePredictor(min_samples=5)
+    for x in (0.05, 0.05, 0.05, 0.05, 10.0, 30.0):
+        p.observe("s", "git", x)
+    assert p.remaining("s", "git", elapsed=0.0) == pytest.approx(0.05)  # median of all six
+    assert p.remaining("s", "git", elapsed=1.0) == pytest.approx(19.0)  # only 10 and 30 outlast 1 s
+    assert p.remaining("s", "git", elapsed=40.0) == float("inf")  # longer than anything seen
+    assert p.remaining("new", "unseen", elapsed=1.0) == pytest.approx(19.0)  # global back-off
+    assert PausePredictor().remaining("s", "git", 1.0) is None  # no history at all

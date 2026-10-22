@@ -18,10 +18,10 @@ from kvtier.sessions import common_prefix_blocks, load_sessions
 from kvtier.sim.engine import SimConfig, Simulator
 from kvtier.sim.metrics import summarize, write_outputs
 from kvtier.sim.policies import (EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy, LruPolicy, OraclePolicy,
-                                 TtlPinPolicy, warm_start)
+                                 RemainingTimeEviction, TtlPinPolicy, warm_start)
 
 POLICIES = ("vllm", "always-offload", "ttl-pin", "predictive", "predictive-cold", "oracle", "noisy-oracle",
-            "oracle-evict", "predictive-evict", "long-offload", "long-offload-oracle")
+            "oracle-evict", "predictive-evict", "long-offload", "long-offload-oracle", "remaining-evict", "belady")
 DEFAULT_SESSIONS = ("traces/sessions/verified.jsonl", "traces/sessions/multilingual.jsonl")
 
 
@@ -68,6 +68,12 @@ def make_policy(name: str, cost: CostModel, train, ttl_s: float, noise: float, s
         return p
     if name == "long-offload-oracle":
         return LongCallOffloadPolicy(threshold_s, oracle=True)
+    if name == "remaining-evict":
+        p = RemainingTimeEviction()
+        warm_start(p, train)
+        return p
+    if name == "belady":
+        return RemainingTimeEviction(oracle=True)
     if name == "oracle-evict":
         return EvictOnlyOracle(cost)
     if name == "predictive-evict":

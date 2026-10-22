@@ -95,6 +95,31 @@ class LongCallOffloadPolicy(LruPolicy):
             self.predictor.observe(s.session_id, s.program, pause_s)
 
 
+class RemainingTimeEviction(LruPolicy):
+    """Caching policy: keep everything while there is room; when space runs out, evict the paused
+    session expected to stay away longest. Expected time left comes from past pauses of the same
+    tool that lasted longer than this pause has so far (C2 back-off keys). Ties and sessions with no
+    history fall back to LRU. With `oracle=True` it uses the true time left (Belady's rule)."""
+
+    def __init__(self, predictor: PausePredictor | None = None, oracle: bool = False):
+        self.predictor = predictor or PausePredictor()
+        self.oracle = oracle
+
+    def time_left(self, s: Session, now: float) -> float:
+        elapsed = now - s.pause_start
+        if self.oracle:
+            return math.inf if s.true_pause_s is None else s.true_pause_s - elapsed
+        left = self.predictor.remaining(s.session_id, s.program, elapsed)
+        return 0.0 if left is None else left
+
+    def eviction_order(self, paused: list[Session], now: float) -> list[Session]:
+        return sorted(paused, key=lambda s: (-self.time_left(s, now), s.last_used))
+
+    def on_return(self, s: Session, pause_s: float) -> None:
+        if not self.oracle:
+            self.predictor.observe(s.session_id, s.program, pause_s)
+
+
 def warm_start(policy, sessions) -> None:
     """Seed the predictor with the pauses of training sessions (as other, earlier sessions)."""
     for rs in sessions:

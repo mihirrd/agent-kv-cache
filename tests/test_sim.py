@@ -220,3 +220,25 @@ def test_long_call_offload_runs_end_to_end():
     assert len(rec.requests) == sum(len(s.turns) for _, s in arrivals)
     assert {p["action"] for p in rec.pauses} == {"keep", "offload"}
     assert not rec.warmups
+
+
+def test_remaining_time_eviction_order():
+    from kvtier.policy import Session
+    from kvtier.predictor import PausePredictor
+    from kvtier.sim.policies import RemainingTimeEviction
+
+    pred = PausePredictor(min_samples=5)
+    for _ in range(5):
+        pred.observe("x", "grep", 0.05)
+        pred.observe("x", "pip", 20.0)
+    pol = RemainingTimeEviction(pred)
+    grep_fresh = Session("grep_fresh", program="grep", pause_start=99.99, last_used=99.99)
+    grep_overdue = Session("grep_overdue", program="grep", pause_start=90.0, last_used=90.0)  # outlasted all greps
+    pip_mid = Session("pip_mid", program="pip", pause_start=95.0, last_used=95.0)  # ~15 s left
+    order = [s.session_id for s in pol.eviction_order([grep_fresh, pip_mid, grep_overdue], now=100.0)]
+    assert order == ["grep_overdue", "pip_mid", "grep_fresh"]
+    belady = RemainingTimeEviction(oracle=True)
+    a = Session("a", pause_start=0.0, true_pause_s=50.0)
+    b = Session("b", pause_start=0.0, true_pause_s=None)  # session ended: never returns
+    c = Session("c", pause_start=0.0, true_pause_s=5.0)
+    assert [s.session_id for s in belady.eviction_order([c, a, b], now=1.0)] == ["b", "a", "c"]

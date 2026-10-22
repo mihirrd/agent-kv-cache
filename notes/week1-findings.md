@@ -291,6 +291,24 @@ Policies around the cliff, goodput vs always-offload (range over seeds):
    evicted. Ended sessions pile up the same way. With heavy-tailed pauses the opposite holds: an
    overdue session is likely in a long pause and should be evicted first.
 
+**Remaining-time eviction, a caching policy (user's direction, Oct 22).** Keep everything while there
+is room; when space runs out, evict the paused session expected to stay away longest. Expected time
+left = median of (x − elapsed) over past pauses x of the same tool that lasted longer than this pause
+so far (C2 back-off keys; infinite if none lasted that long). Return reloads from CPU via LMCache.
+Compared with Belady (evict who truly returns last). Full pool, 5 seeds, vs always-offload:
+
+| Policy | 4×, 18/min | 4×, 20 | 4×, 22 | 4×, 24 | 8×, 30 | 8×, 32 |
+|---|---|---|---|---|---|---|
+| always-offload (abs.) | 2.87/s | 3.02/s | 2.30/s | 1.61/s | 4.96/s | 5.09/s |
+| **ours (remaining-evict)** | +0.3% | +0.9% | **+11.4% [+1, +30]** | **+7.4% [+1, +15]** | +0.1% | +1.5% [0, +7] |
+| perfect (Belady) | +0.3% | +1.4% | +33.9% [+1, +74] | +12.9% [+4, +22] | +0.3% | +3.5% [0, +16] |
+| vLLM default | −9% | −45% | −46% | −41% | −25% | −51% |
+
+- **First tool-aware policy that never loses:** its worst seed in every cell is ≥ 0%, and it gains
+  where memory runs out. It captures about a third (22/min) to half (24/min) of Belady's gain.
+- At 4×, 22/min it keeps 79% of returning sessions on GPU vs 74% for LRU (Belady: 90%).
+- Gains are concentrated at the memory cliff; away from it there is nothing to evict.
+
 Caveats before treating this as final:
 - The calibration is placeholder. The verdict depends on reload overhead and on whether reloads
   block the step; an asynchronous prefetch path (LMCache controller API) would make proactive
