@@ -5,3 +5,9 @@ results/
 logs/
 traces/raw/
 .DS_Store
+
+# Local tooling and AI-assistant files (kept on disk, not part of the project)
+CLAUDE.md
+.claude/
+notes/CHECKPOINT.md
+*.docx
