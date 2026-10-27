@@ -8,13 +8,12 @@ import argparse
 import concurrent.futures
 import dataclasses
 import json
-import random
 import subprocess
 import time
 from pathlib import Path
 
 from kvtier.cost import GATE_A_TP2, Calibration, CostModel, PredictivePolicy
-from kvtier.sessions import common_prefix_blocks, load_sessions
+from kvtier.sessions import common_prefix_blocks, load_sessions, split
 from kvtier.sim.engine import SimConfig, Simulator
 from kvtier.sim.metrics import summarize, write_outputs
 from kvtier.sim.policies import (ContinuumPolicy, EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy,
@@ -25,17 +24,6 @@ POLICIES = ("vllm", "always-offload", "ttl-pin", "predictive", "predictive-cold"
             "continuum", "continuum-ttl", "remaining-evict-fcfs")
 PROGRAM_FCFS = ("continuum", "remaining-evict-fcfs")  # policies run with Continuum's queue order
 DEFAULT_SESSIONS = ("traces/sessions/verified.jsonl", "traces/sessions/multilingual.jsonl")
-
-
-def split(sessions_by_file: list[list], which: str, train_share: float = 0.8, seed: int = 1234) -> list:
-    """Fixed 80/20 split, stratified by file (trace set)."""
-    out = []
-    for sessions in sessions_by_file:
-        ordered = sorted(sessions, key=lambda s: s.session_id)
-        random.Random(seed).shuffle(ordered)
-        k = round(train_share * len(ordered))
-        out += {"train": ordered[:k], "holdout": ordered[k:], "all": ordered}[which]
-    return out
 
 
 def faster_compute(cal: Calibration, speedup: float) -> Calibration:

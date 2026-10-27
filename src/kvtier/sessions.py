@@ -10,6 +10,7 @@ Build on gpubox:  uv run python -m kvtier.sessions traces/raw/verified traces/se
 import argparse
 import hashlib
 import json
+import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -111,6 +112,17 @@ def load_sessions(path: Path) -> tuple[list[ReplaySession], dict]:
             d = json.loads(line)
             sessions.append(ReplaySession(d["session_id"], [Turn(**t) for t in d["turns"]]))
     return sessions, meta
+
+
+def split(sessions_by_file: list[list], which: str, train_share: float = 0.8, seed: int = 1234) -> list:
+    """Fixed 80/20 split, stratified by file (trace set)."""
+    out = []
+    for sessions in sessions_by_file:
+        ordered = sorted(sessions, key=lambda s: s.session_id)
+        random.Random(seed).shuffle(ordered)
+        k = round(train_share * len(ordered))
+        out += {"train": ordered[:k], "holdout": ordered[k:], "all": ordered}[which]
+    return out
 
 
 class QwenTokenizer:
