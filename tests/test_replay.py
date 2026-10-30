@@ -15,6 +15,7 @@ from kvtier.replay import (
     check,
     load_traces,
     parse_metrics,
+    regime,
     summarize,
 )
 from kvtier.sessions import ReplaySession
@@ -154,6 +155,40 @@ def test_replay_priority_by_session_arrival():
     # every turn of a session keeps the priority of its arrival
     for sid in {r["sid"] for r in rp.records}:
         assert len({r["priority"] for r in rp.records if r["sid"] == sid}) == 1
+
+
+def test_time_scale_stretches_wall_clock_but_reports_emulated_time():
+    import time
+
+    tr = trace("a", 2, pause=0.1)
+    cfg = RunConfig(time_scale=3.0)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(FakeServer())) as client:
+            rp = Replayer([tr], cfg, client, "fake-model")
+            rp.t0 = time.monotonic()
+            t = time.monotonic()
+            await rp.session(tr, "a#0", 1, 0.0)
+            return rp.records, time.monotonic() - t
+
+    records, wall = asyncio.run(go())
+    gap = records[1]["arrival"] - records[0]["finish"]
+    assert gap == pytest.approx(0.1, abs=0.03)  # reported in emulated seconds
+    assert wall >= 0.3  # but the pause took 3 x 0.1 s of wall clock
+    assert records[1]["pause_before_s"] == pytest.approx(0.1)
+
+
+def test_regime_from_metrics():
+    cfg = RunConfig(warmup_s=0, duration_s=60)
+    ms = [{"t": t, "num_requests_running": 2.0 + t / 10, "num_requests_waiting": 0.0, "kv_cache_usage_perc": t / 100,
+           "prefix_cache_queries_total": 100.0 * t, "prefix_cache_hits_total": 80.0 * t,
+           "external_prefix_cache_hits_total": 5.0 * t, "num_preemptions_total": 0.0} for t in range(0, 60, 5)]
+    g = regime(ms, cfg)
+    assert g["gpu_prefix_hit_rate"] == pytest.approx(0.8)
+    assert g["cpu_reloaded_tokens"] == pytest.approx(5.0 * 55)
+    assert g["kv_usage_max"] == pytest.approx(0.55)
+    assert g["running_growth"] > 1.5  # running count climbs over the window
+    assert regime(ms[:2], cfg) == {}
 
 
 def test_summarize_counts_unserved_as_misses():

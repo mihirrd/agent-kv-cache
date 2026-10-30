@@ -103,6 +103,9 @@ class RunConfig:
     seed: int = 0
     priority: str = "none"  # "session-arrival": priority = ms from run start to the session's arrival
     pause_scale: float = 1.0  # multiply recorded tool pauses (tests use 0)
+    # Stretch the clock k-fold: pauses and arrival gaps take k times longer on the wall clock and every
+    # measured time is divided by k, so the GPU behaves as if it were k times faster (notes/emulation.md).
+    time_scale: float = 1.0
     max_turns: int | None = None
     scrape_every_s: float = 5.0
     base_url: str = "http://localhost:8000"
@@ -116,7 +119,11 @@ class Replayer:
         self.t0 = 0.0
 
     def now(self) -> float:
-        return time.monotonic() - self.t0
+        """Time since the start of the run, in emulated seconds (wall seconds / time_scale)."""
+        return (time.monotonic() - self.t0) / self.cfg.time_scale
+
+    async def sleep(self, emulated_s: float) -> None:
+        await asyncio.sleep(max(0.0, emulated_s) * self.cfg.time_scale)
 
     async def run(self) -> list[dict]:
         cfg = self.cfg
@@ -126,11 +133,11 @@ class Replayer:
         scraper = asyncio.create_task(self.scrape())
         tasks = []
         for k, (t, i, salt) in enumerate(schedule):
-            await asyncio.sleep(max(0.0, t - self.now()))
+            await self.sleep(t - self.now())
             tr = self.traces[i]
             tasks.append(asyncio.create_task(self.session(tr, f"{tr.session_id}#{k}", salt, t)))
         if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=max(0.0, end - self.now()))
+            _, pending = await asyncio.wait(tasks, timeout=max(0.0, end - self.now()) * cfg.time_scale)
             for task in pending:
                 task.cancel()  # closing the stream aborts the request in vLLM
             await asyncio.gather(*pending, return_exceptions=True)
@@ -154,7 +161,7 @@ class Replayer:
                 return
             if st.pause_s:
                 pause_before = st.pause_s * self.cfg.pause_scale
-                await asyncio.sleep(pause_before)
+                await self.sleep(pause_before)
 
     async def request(self, messages: list[dict], sid: str, prio: int | None, rec: dict) -> None:
         n = rec["output_tokens"]
@@ -219,6 +226,19 @@ def summarize(records: list[dict], cfg: RunConfig) -> dict:
         s[f"returning_goodput_{slo:g}s"] = sum(r["ttft"] <= slo for r in ret) / cfg.duration_s
         s[f"returning_slo_share_{slo:g}s"] = sum(r["ttft"] <= slo for r in ret) / n_ret if n_ret else None
     s["goodput"] = s[f"returning_goodput_{HEADLINE_SLO_S:g}s"]  # headline: returning turns at 5 s
+    # what an agent waits for per turn: first token plus writing the reply
+    done = [r["finish"] - r["arrival"] for r in ret if r.get("finish") is not None]
+    s["returning_turn_time_p50_s"] = _q(done, 0.5)
+    s["returning_turn_time_p99_s"] = _q(done, 0.99)
+
+    # Regime (notes/emulation.md): how much of an agent's life is tool time, and how much of returning
+    # turns' prompts the GPU still held.
+    paused = sum(r.get("pause_before_s") or 0 for r in window)
+    busy = sum(r["finish"] - r["arrival"] for r in window if r.get("finish") is not None)
+    s["pause_share"] = paused / (paused + busy) if paused + busy else None
+    cached = [r for r in ret if r.get("cached_tokens") is not None]
+    s["returning_cached_share"] = (sum(r["cached_tokens"] for r in cached) / sum(r["served_prompt_tokens"] for r in cached)
+                                   if cached else None)
 
     # Sanity checks: the prompt differs from the trace only by the salt line; output length is forced.
     deltas = [r["served_prompt_tokens"] - r["prompt_tokens"] for r in records if "served_prompt_tokens" in r]
@@ -227,6 +247,29 @@ def summarize(records: list[dict], cfg: RunConfig) -> dict:
     s["output_length_mismatches"] = sum(
         r["served_output_tokens"] != r["output_tokens"] for r in records if "served_output_tokens" in r)
     return s
+
+
+def regime(metrics: list[dict], cfg: RunConfig) -> dict:
+    """Server-side view of the measurement window: is compute or memory the bottleneck?"""
+    lo, hi = cfg.warmup_s, cfg.warmup_s + cfg.duration_s
+    ms = [m for m in metrics if lo <= m["t"] < hi]
+    if len(ms) < 3:
+        return {}
+    third = max(1, len(ms) // 3)
+    avg = lambda key, xs=ms: sum(m.get(key, 0.0) for m in xs) / len(xs)  # noqa: E731
+    delta = lambda key: ms[-1].get(key, 0.0) - ms[0].get(key, 0.0)  # noqa: E731
+    queries = delta("prefix_cache_queries_total")
+    return {
+        "running_avg": avg("num_requests_running"),
+        # > ~1.3: requests pile up over the window, i.e. the server cannot keep up (no steady state)
+        "running_growth": avg("num_requests_running", ms[-third:]) / max(avg("num_requests_running", ms[:third]), 1.0),
+        "waiting_avg": avg("num_requests_waiting"),
+        "kv_usage_avg": avg("kv_cache_usage_perc"),
+        "kv_usage_max": max(m.get("kv_cache_usage_perc", 0.0) for m in ms),
+        "gpu_prefix_hit_rate": delta("prefix_cache_hits_total") / queries if queries else None,
+        "cpu_reloaded_tokens": delta("external_prefix_cache_hits_total"),
+        "preemptions": delta("num_preemptions_total"),
+    }
 
 
 async def _run(traces: list[ReplayTrace], cfg: RunConfig) -> tuple[list[dict], list[dict]]:
@@ -270,6 +313,8 @@ def main() -> None:
     ap.add_argument("--priority", choices=("none", "session-arrival"), default="none",
                     help="session-arrival needs the server started with --scheduling-policy priority")
     ap.add_argument("--pause-scale", type=float, default=1.0)
+    ap.add_argument("--time-scale", type=float, default=1.0,
+                    help="emulate a k-times faster GPU: wall clock runs k times longer, times are reported / k")
     ap.add_argument("--max-turns", type=int, default=None)
     ap.add_argument("--config", default="always-offload", help="label for the server setup, used in --out")
     ap.add_argument("--cap", default="full", help="label for the KV cap, used in --out")
@@ -286,13 +331,14 @@ def main() -> None:
     traces = load_traces(args.sessions, args.split or "train")
     cfg = RunConfig(load_per_min=args.load, warmup_s=args.warmup, duration_s=args.duration, drain_s=args.drain,
                     seed=args.seed, priority=args.priority, pause_scale=args.pause_scale,
-                    max_turns=args.max_turns, base_url=args.base_url)
+                    time_scale=args.time_scale, max_turns=args.max_turns, base_url=args.base_url)
     out = Path(args.out or f"results/replay/{args.config}/load{args.load:g}/{args.cap}/seed{args.seed}")
     out.mkdir(parents=True, exist_ok=True)
     started = time.time()
     records, metrics = asyncio.run(_run(traces, cfg))
     summary = {"config": args.config, "cap": args.cap, "load_per_min": args.load, "seed": args.seed,
-               **summarize(records, cfg), "wall_s": round(time.time() - started, 1)}
+               "time_scale": args.time_scale, **summarize(records, cfg), **regime(metrics, cfg),
+               "wall_s": round(time.time() - started, 1)}
     for name, rows in (("requests.jsonl", records), ("metrics.jsonl", metrics)):
         (out / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -300,8 +346,9 @@ def main() -> None:
                                                  "split": args.split or "train", "config": args.config,
                                                  "cap": args.cap, "started": started}, indent=2))
     for k in ("requests", "served", "errors", "goodput", "goodput_5s", "returning_ttft_p50_s", "returning_ttft_p99_s",
-              "first_turn_ttft_p50_s", "prompt_token_delta_min", "prompt_token_delta_max", "output_length_mismatches"):
-        print(f"{k:<26} {summary[k]}")
+              "returning_turn_time_p50_s", "first_turn_ttft_p50_s", "pause_share", "returning_cached_share",
+              "running_growth", "kv_usage_max", "cpu_reloaded_tokens", "preemptions", "output_length_mismatches"):
+        print(f"{k:<26} {summary.get(k)}")
     print(f"-> {out}")
 
 
