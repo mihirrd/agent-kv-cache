@@ -156,17 +156,22 @@ class Replayer:
                    "prompt_tokens": st.prompt_tokens, "output_tokens": max(1, st.output_tokens),
                    "program": st.program, "pause_before_s": pause_before, "priority": prio}
             self.records.append(rec)
-            await self.request(tr.prompt(turn, tag), sid, prio, rec)
+            # The tool that follows this turn, as the server would parse it from a real reply (ours are
+            # forced-length filler), and its wall-clock length, which only the oracle policy reads.
+            xargs = {"session_id": sid}
+            if st.pause_s is not None:
+                xargs |= {"program": st.program, "pause_s": st.pause_s * self.cfg.pause_scale * self.cfg.time_scale}
+            await self.request(tr.prompt(turn, tag), xargs, prio, rec)
             if "error" in rec:
                 return
             if st.pause_s:
                 pause_before = st.pause_s * self.cfg.pause_scale
                 await self.sleep(pause_before)
 
-    async def request(self, messages: list[dict], sid: str, prio: int | None, rec: dict) -> None:
+    async def request(self, messages: list[dict], xargs: dict, prio: int | None, rec: dict) -> None:
         n = rec["output_tokens"]
         body = {"model": self.model, "messages": messages, "max_tokens": n, "min_tokens": n, "temperature": 0,
-                "stream": True, "stream_options": {"include_usage": True}, "vllm_xargs": {"session_id": sid}}
+                "stream": True, "stream_options": {"include_usage": True}, "vllm_xargs": xargs}
         if prio is not None:
             body["priority"] = prio
         try:

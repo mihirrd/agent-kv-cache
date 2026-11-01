@@ -90,6 +90,38 @@ Time to first token improved 2.3×, but capacity barely moved (~10–12/min). Th
 but decode throughput falls from ~390 to ~220 tok/s as running requests pass 30 (12/min needs ~380).
 Decode reads every running request's full context each step at ~90 GB/s, ~15% of the card's bandwidth.
 
+### Oct 30: GPU 1 overheats and throttles; results that used it are invalid
+
+Sustained fp16 matmul for 60 s: GPU 0 holds 43.9 TFLOPS at 1350 MHz, 59 → 75°C, fan ~50%, no throttling.
+GPU 1 starts at 32.6 TFLOPS, then reaches 89°C within ~10 s, `sw_thermal_slowdown` goes active, the clock
+drops to 300 MHz and it settles at **6.0 TFLOPS** with the fan at 90%. It is ~7× slower than GPU 0
+under load. Needs a physical fix (cooling/fan/airflow); until then use GPU 0 only.
+
+Results that ran on GPU 1 (port 8001) are confounded and must not be used: the load-15 and load-20
+probes, full-pool load 8 (sdpa), the SDPA side of the Oct 29 A/B (SDPA was handicapped, not helped),
+and every small-pool collapse (load 8 @22.5K and @35K, load 10 @45/60/80K). **Every 7B TP=2 run is
+also suspect**: TP=2 runs at the speed of the slower GPU, so the Oct 27 7B smoke run ("overloaded at
+6/min") and possibly week-1 TP=2 timings (Gate A) were throttled. When GPU 1 started throttling is unknown.
+
+Valid (GPU 0): load 10/12 probes, full-pool load 6 and 10 (both kernels), stock side of the A/B, and
+small pools load 6 @21K (99% ≤ 2 s), load 10 @33.6K (87%, queue starting late in the run), load 8
+@45K/60K/80K (100% ≤ 2 s; reloads 189K / 79K / 12K tokens).
+
+### Nov 1: first policy comparison (GPU 0, load 8, 3 seeds per cell)
+
+Our remaining-time eviction in vLLM (fork `b5f11c4`, `KVTIER_POLICY=remaining`) vs stock LRU vs the
+oracle (true pause from the harness, `KVTIER_POLICY=oracle`), all with LMCache:
+
+| pool | reloaded tokens: LRU | ours | oracle | gap closed |
+|---|---|---|---|---|
+| 45K | 282K | 192K | 121K | 56% |
+| 60K | 109K | 38K | 15K | 76% |
+
+TTFT is the same for all three (p50 0.066 s, 99.8–100% ≤ 2 s): a 0.5B reload costs milliseconds, so
+fewer reloads do not show up in TTFT. Next: the same comparison without the CPU tier (a miss recomputes).
+Runs before the orphan-block fix are in `results/replay/remaining-orphanbug/` and are invalid: the replay
+never reuses the KV of a generated reply, and those blocks must be evicted before any session.
+
 ## Procedure for a new setting
 
 1. **Find compute capacity:** replay at rising load with the full pool. Capacity is the highest load

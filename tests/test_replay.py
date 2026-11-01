@@ -33,7 +33,8 @@ def trace(name: str, n_turns: int, pause: float = 1.0) -> ReplayTrace:
         messages += [{"role": "assistant", "content": f"cmd {i}"}, {"role": "user", "content": f"out {i}"}]
     prompts = [list(range(20 + 10 * i)) for i in range(n_turns)]
     session = ReplaySession.from_tokens(name, prompts, outputs=[5 + i for i in range(n_turns)],
-                                        pauses=[pause] * (n_turns - 1) + [None])
+                                        pauses=[pause] * (n_turns - 1) + [None],
+                                        programs=[f"prog{i}" for i in range(n_turns)])
     return ReplayTrace(session, messages, [2 + 2 * i for i in range(n_turns)])
 
 
@@ -130,7 +131,11 @@ def test_replay_sends_recorded_prompts_with_forced_output():
         r = record_for(rp, body)
         assert body["min_tokens"] == body["max_tokens"] == r["output_tokens"]
         assert body["temperature"] == 0 and body["stream"] is True
-        assert body["vllm_xargs"] == {"session_id": r["sid"]}
+        # the tool that follows this turn, and its wall-clock length for the oracle; none after the last turn
+        last = r["turn"] == len(by_trace[r["trace"]].session.turns) - 1
+        assert body["vllm_xargs"] == ({"session_id": r["sid"]} if last else
+                                      {"session_id": r["sid"], "program": f"prog{r['turn']}",
+                                       "pause_s": 1.0 * cfg.pause_scale * cfg.time_scale})
         assert "priority" not in body
         tr = by_trace[r["trace"]]
         expected = tr.prompt(r["turn"])
