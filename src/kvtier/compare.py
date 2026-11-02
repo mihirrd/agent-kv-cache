@@ -1,14 +1,20 @@
-"""Compare eviction policies across pools and seeds: returning-turn TTFT, recompute and gap closed.
+"""Compare eviction policies across pools and seeds: returning-turn TTFT, recompute and gap closed,
+then job completion time (Continuum's metric).
 
 Usage: python -m kvtier.compare <name> [policies...]
 Reads results/replay/<name>-<policy>/load*/<pool>/seed*/ (requests.jsonl, config.json). Each seed's
 metrics use the measurement window only; the table shows the mean over seeds, and the pooled
-columns put every seed's returning turns in one distribution.
+columns put every seed's returning turns in one distribution. Job times cover sessions that arrived
+in the window and finished every turn under every policy (same seed, same sessions), so each
+policy is timed on the same jobs.
 """
 import json
 import statistics
 import sys
+from functools import cache
 from pathlib import Path
+
+from kvtier.sessions import load_sessions
 
 ROOT = Path("results/replay")
 QUANTILES = (0.5, 0.9, 0.99)
@@ -34,6 +40,48 @@ def metrics(ret: list[dict]) -> dict:
     m["recompute_k"] = sum(r["served_prompt_tokens"] - r["cached_tokens"] for r in ret) / 1000
     m["n"] = len(ret)
     return m
+
+
+@cache
+def turn_counts(session_files: tuple[str, ...]) -> dict[str, int]:
+    return {s.session_id: len(s.turns) for f in session_files for s in load_sessions(Path(f))[0]}
+
+
+def jobs(run: Path) -> dict[str, tuple[float, float]]:
+    """sid -> (job completion time, time spent in the model) for sessions that arrived in the window
+    and finished every turn."""
+    cfg = json.loads((run / "config.json").read_text())
+    n_turns = turn_counts(tuple(cfg["sessions"]))
+    lo, hi = cfg["warmup_s"], cfg["warmup_s"] + cfg["duration_s"]
+    by_sid: dict[str, list[dict]] = {}
+    for line in (run / "requests.jsonl").open():
+        r = json.loads(line)
+        by_sid.setdefault(r["sid"], []).append(r)
+    out = {}
+    for sid, recs in by_sid.items():
+        limit = cfg.get("max_turns") or n_turns[recs[0]["trace"]]
+        done = [r for r in recs if r.get("finish") is not None]
+        if lo <= recs[0]["session_arrival"] < hi and len(done) == min(limit, n_turns[recs[0]["trace"]]):
+            out[sid] = (max(r["finish"] for r in done) - recs[0]["session_arrival"],
+                        sum(r["finish"] - r["arrival"] for r in done))
+    return out
+
+
+def job_table(name: str, policies: list[str]) -> None:
+    runs: dict[tuple[str, str], dict[str, dict]] = {}  # (pool, seed) -> policy -> jobs
+    for policy in policies:
+        for seed_dir in ROOT.glob(f"{name}-{policy}/load*/*/seed*"):
+            runs.setdefault((seed_dir.parent.name, seed_dir.name), {})[policy] = jobs(seed_dir)
+    print(f"\n{'pool':>7} {'policy':>9} {'jobs':>5} {'JCT mean':>9} {'JCT p90':>8} {'model s/job':>11}")
+    for pool in sorted({p for p, _ in runs}, key=int):
+        cells = [by_policy for (p, _), by_policy in runs.items() if p == pool and len(by_policy) == len(policies)]
+        common = [set.intersection(*(set(c[pol]) for pol in policies)) for c in cells]
+        for policy in policies:
+            jct = [c[policy][sid][0] for c, sids in zip(cells, common) for sid in sids]
+            model = [c[policy][sid][1] for c, sids in zip(cells, common) for sid in sids]
+            if jct:
+                print(f"{pool:>7} {policy:>9} {len(jct):>5} {statistics.mean(jct):9.1f} {_q(jct, 0.9):8.1f} "
+                      f"{statistics.mean(model):11.2f}")
 
 
 def main() -> None:
@@ -65,6 +113,7 @@ def main() -> None:
                 span = lru[key] - orc[key]
                 gap = (lru[key] - ours[key]) / span if span else float("nan")
                 print(f"{'':>7} gap closed on {key}: {gap:.0%}")
+    job_table(name, policies)
 
 
 if __name__ == "__main__":
