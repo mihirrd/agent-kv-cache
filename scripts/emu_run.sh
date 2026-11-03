@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One emulator experiment cell on gpubox: restart the GPU's 0.5B server with a fixed KV pool, wait for
 # it, then replay. Run inside tmux (exp0 / exp1). See notes/emulation.md.
-# Usage: [BRB_POLICY=remaining|oracle] [BRB_SCHED=continuum] [NO_LMCACHE=1] [PROFILE=7b1] [MODEL=...] scripts/emu_run.sh <gpu> <pool_tokens|full> <load_per_min> <config> [extra replay args...]
+# Usage: [BRB_POLICY=remaining|oracle] [BRB_SCHED=continuum] [BRB_PAUSE_DB=path] [NO_LMCACHE=1] [PROFILE=7b1] [MODEL=...] scripts/emu_run.sh <gpu> <pool_tokens|full> <load_per_min> <config> [extra replay args...]
 # BRB_POLICY unset is stock vLLM (LRU); see third_party/vllm/vllm/v1/core/brb_sessions.py.
 # BRB_SCHED=continuum adds the Continuum baseline's pins and queue order (brb_continuum.py).
 # Server env (e.g. BRB_SDPA_PREFILL=0) passes through. Output: results/replay/<config>/load<L>/<pool>/seed<S>/
@@ -27,7 +27,7 @@ tmux kill-session -t "vllm$GPU" 2>/dev/null || true
 # (Runpod) nvidia-smi cannot see the processes. GPU 0 on gpubox holds ~200 MiB for the desktop.
 while (( $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$GPU") > 1024 )); do sleep 2; done
 tmux new -d -s "vllm$GPU" \
-  "BRB_POLICY=${BRB_POLICY:-} BRB_SCHED=${BRB_SCHED:-} NO_LMCACHE=${NO_LMCACHE:-} PROFILE=${PROFILE:-emu} MODEL=${MODEL:-} GPU=$GPU NUM_GPU_BLOCKS=$BLOCKS MAX_MODEL_LEN=$MAX_LEN ./scripts/run_vllm.sh 2>&1 | tee logs/vllm$GPU.log"
+  "BRB_POLICY=${BRB_POLICY:-} BRB_SCHED=${BRB_SCHED:-} BRB_PAUSE_DB=${BRB_PAUSE_DB:-} NO_LMCACHE=${NO_LMCACHE:-} PROFILE=${PROFILE:-emu} MODEL=${MODEL:-} GPU=$GPU NUM_GPU_BLOCKS=$BLOCKS MAX_MODEL_LEN=$MAX_LEN ./scripts/run_vllm.sh 2>&1 | tee logs/vllm$GPU.log"
 until curl -sf "localhost:$PORT/health" >/dev/null; do
   tmux has-session -t "vllm$GPU" 2>/dev/null || { echo "server on GPU $GPU died; see logs/vllm$GPU.log" >&2; exit 1; }
   sleep 3
