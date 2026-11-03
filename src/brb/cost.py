@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from kvtier.policy import Action, KVPolicy, Session, State
-from kvtier.predictor import PausePredictor
+from brb.policy import Action, KVPolicy, Session, State
+from brb.predictor import PausePredictor
 
 KV_BYTES_PER_TOKEN_QWEN7B = 28 * 4 * 128 * 2 * 2  # layers x KV heads x head dim x (K, V) x fp16 = 57,344
 LMCACHE_CHUNK = 256  # tokens per LMCache chunk

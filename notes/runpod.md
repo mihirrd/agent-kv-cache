@@ -16,7 +16,7 @@ served too few sessions (2-3 alive) for the policy to have choices; 32B on one A
 KV per token: 7B 57,344 B, 14B 196,608 B. bf16 on the A100 (`PROFILE=a100`).
 
 Each queue: capacity probes at loads 4/8/12/16/24 (full pool, stops at the first load that falls
-behind) → pools at 1.5x and 2x live KV at the highest load that kept up (`kvtier.plan`, calibrated on
+behind) → pools at 1.5x and 2x live KV at the highest load that kept up (`brb.plan`, calibrated on
 the 0.5B runs) → 3 policies x 2 pools x 3 seeds. Every run is 14 min (2 warm-up, 10 measured, 2 drain).
 Finished runs are skipped, so a queue can be restarted after a crash. Decisions go to
 `results/replay/a100-<size>-nocpu-plan.txt`; runs to `results/replay/a100-<size>-nocpu-{probe,lru,remaining,oracle}/`.
@@ -91,7 +91,7 @@ GPU_HOST=msd-14b GPU_DIR=/workspace/msd_project scripts/remote.sh "tail -3 logs/
 ```
 Sanity after the first probe: `returning_slo_share_2s` high, `pause_share` well above the 2080 Ti's
 30%, and the server log shows the FlashAttention backend (not Triton). After the first `remaining` run:
-`kvtier: evicted ... orphan blocks, ... by policy` lines in `logs/vllm0.log`.
+`brb: evicted ... orphan blocks, ... by policy` lines in `logs/vllm0.log`.
 
 **6. Collect, then delete** (results go to gpubox, the home of all results):
 ```bash
@@ -104,7 +104,7 @@ Then compare on gpubox (`results/replay/a100-{7b,14b}-nocpu-{lru,remaining,oracl
 
 ## What differs from gpubox
 
-- 14B/7B in bf16 on stock vLLM attention: `PROFILE=a100` sets `KVTIER_SDPA_PREFILL=0`, `DTYPE=bfloat16`.
+- 14B/7B in bf16 on stock vLLM attention: `PROFILE=a100` sets `BRB_SDPA_PREFILL=0`, `DTYPE=bfloat16`.
 - `scripts/emu_run.sh` waits for GPU memory to drop, not for process IDs (containers hide them).
 - Only `/workspace` survives a stop: `remote.sh` keeps uv's Python and caches and `HF_HOME` there.
 - Rehearsed end to end on gpubox with the 0.5B (`NAME=dryrun`, short runs): see `logs/dryrun.log`.

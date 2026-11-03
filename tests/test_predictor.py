@@ -1,6 +1,6 @@
 import pytest
 
-from kvtier.predictor import PausePredictor, percentile, tool_category
+from brb.predictor import PausePredictor, percentile, tool_category
 
 
 def test_percentile_interpolates():
@@ -74,3 +74,36 @@ def test_remaining_time_given_elapsed():
     assert p.remaining("s", "git", elapsed=40.0) == float("inf")  # longer than anything seen
     assert p.remaining("new", "unseen", elapsed=1.0) == pytest.approx(19.0)  # global back-off
     assert PausePredictor().remaining("s", "git", 1.0) is None  # no history at all
+
+
+def test_saved_history_survives_a_restart(tmp_path):
+    db = tmp_path / "pauses.json"
+    p = PausePredictor(min_samples=3)
+    for s in ("a", "b", "c"):
+        p.observe(s, "pytest", 41.234)
+    p.observe("a", "frobnicate", 7.0)  # a new tool is saved like any other
+    p.save(db)
+
+    q = PausePredictor(min_samples=3)
+    assert q.load(db) == 2
+    pred = q.predict("new", "pytest")
+    assert pred.key == ("program", "pytest") and pred.p50 == 41.2  # 0.1 s resolution
+    assert q.predict("a", "pytest").key == ("program", "pytest")  # per-session keys are not saved
+    saved = PausePredictor().load(tmp_path / "missing.json")
+    assert saved == 0
+
+
+def test_saved_history_keeps_recent_programs_and_window(tmp_path, monkeypatch):
+    import brb.predictor as pred_mod
+
+    monkeypatch.setattr(pred_mod, "MAX_SAVED_PROGRAMS", 2)
+    p = PausePredictor(window=3)
+    for prog in ("ls", "git", "pytest"):
+        p.observe("s", prog, 1.0)
+    p.observe("s", "ls", 2.0)  # ls seen again: now more recent than git
+    d = p.to_dict()
+    assert set(d["programs"]) == {"pytest", "ls"} and d["programs"]["ls"] == [1.0, 2.0]
+
+    q = PausePredictor(window=2)
+    q.load_dict({"programs": {"go": [5.0, 6.0, 7.0]}})
+    assert list(q._buffers[("program", "go")]) == [6.0, 7.0]

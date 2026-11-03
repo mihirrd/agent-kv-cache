@@ -37,7 +37,7 @@ case "${PROFILE:-}" in
     GPU=${GPU:-0}
     TP=${TP:-1}
     PORT=${PORT:-$((8000 + ${GPU%%,*}))}
-    KVTIER_SDPA_PREFILL=${KVTIER_SDPA_PREFILL:-0}
+    BRB_SDPA_PREFILL=${BRB_SDPA_PREFILL:-0}
     ;;
   "") ;;
   *) echo "unknown PROFILE=$PROFILE (emu, 7b, 7b1 or a100)" >&2; exit 1 ;;
@@ -57,8 +57,8 @@ export CUDA_VISIBLE_DEVICES=$GPU
 # processes, so an unset seed gives each its own hashes and every LMCache lookup misses.
 export PYTHONHASHSEED=0
 # Mixed decode+prefill steps: decodes via the Triton 3D path, prefills via PyTorch SDPA (our vLLM fork,
-# triton_attn.py). Prefill attention is ~5-10x faster on Turing. KVTIER_SDPA_PREFILL=0 restores stock vLLM.
-export KVTIER_SDPA_PREFILL=${KVTIER_SDPA_PREFILL:-1}
+# triton_attn.py). Prefill attention is ~5-10x faster on Turing. BRB_SDPA_PREFILL=0 restores stock vLLM.
+export BRB_SDPA_PREFILL=${BRB_SDPA_PREFILL:-1}
 export LMCACHE_CHUNK_SIZE=${LMCACHE_CHUNK_SIZE:-256}
 export LMCACHE_LOCAL_CPU=True
 export LMCACHE_MAX_LOCAL_CPU_SIZE=${CPU_CACHE_GB:-20}

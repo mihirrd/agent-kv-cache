@@ -1,7 +1,7 @@
 """C7 simulator CLI (run on gpubox).
 
-  uv run python -m kvtier.sim run --policy oracle --load 20 --cap 100000 --seed 1
-  uv run python -m kvtier.sim sweep --policy vllm always-offload oracle --load 10 20 40 --cap 100000 205936
+  uv run python -m brb.sim run --policy oracle --load 20 --cap 100000 --seed 1
+  uv run python -m brb.sim sweep --policy vllm always-offload oracle --load 10 20 40 --cap 100000 205936
 """
 
 import argparse
@@ -12,11 +12,11 @@ import subprocess
 import time
 from pathlib import Path
 
-from kvtier.cost import GATE_A_TP2, Calibration, CostModel, PredictivePolicy
-from kvtier.sessions import common_prefix_blocks, load_sessions, split
-from kvtier.sim.engine import SimConfig, Simulator
-from kvtier.sim.metrics import summarize, write_outputs
-from kvtier.sim.policies import (ContinuumPolicy, EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy,
+from brb.cost import GATE_A_TP2, Calibration, CostModel, PredictivePolicy
+from brb.sessions import common_prefix_blocks, load_sessions, split
+from brb.sim.engine import SimConfig, Simulator
+from brb.sim.metrics import summarize, write_outputs
+from brb.sim.policies import (ContinuumPolicy, EvictOnlyOracle, EvictOnlyPredictive, LongCallOffloadPolicy,
                                  LruPolicy, OraclePolicy, RemainingTimeEviction, TtlPinPolicy, warm_start)
 
 POLICIES = ("vllm", "always-offload", "ttl-pin", "predictive", "predictive-cold", "oracle", "noisy-oracle",

@@ -6,12 +6,12 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from kvtier.cost import CostModel, PredictivePolicy
-from kvtier.policy import Action, KVPolicy, Session, State
-from kvtier.sessions import BLOCK, ReplaySession, salt_hashes
-from kvtier.sim.memory import CpuTier, GpuPool
-from kvtier.sim.server import Request, Server
-from kvtier.sim.timing import StepModel
+from brb.cost import CostModel, PredictivePolicy
+from brb.policy import Action, KVPolicy, Session, State
+from brb.sessions import BLOCK, ReplaySession, salt_hashes
+from brb.sim.memory import CpuTier, GpuPool
+from brb.sim.server import Request, Server
+from brb.sim.timing import StepModel
 
 # Event priorities at equal times: finish work before admitting new arrivals.
 STEP_END, TURN, PREFETCH, ARRIVAL, SAMPLE = 0, 1, 2, 3, 4

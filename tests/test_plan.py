@@ -1,6 +1,6 @@
 import json
 
-from kvtier.plan import keeps_up, live_kv, main, pick_load
+from brb.plan import keeps_up, live_kv, main, pick_load
 
 OK = {"errors": 0, "returning_slo_share_2s": 1.0, "waiting_avg": 0.0}
 SLOW = {"errors": 0, "returning_slo_share_2s": 0.94, "waiting_avg": 0.1}

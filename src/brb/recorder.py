@@ -5,7 +5,7 @@ list. Turn i's prompt is footer["messages"][:prompt_messages], so replay can reb
 exactly. Timestamps are wall-clock seconds; pauses are tool_end - tool_start of each turn.
 
 Run on gpubox (needs Docker and ANTHROPIC_API_KEY):
-    uv run python -m kvtier.recorder --n 10 --out traces/raw/pilot
+    uv run python -m brb.recorder --n 10 --out traces/raw/pilot
 """
 
 import argparse

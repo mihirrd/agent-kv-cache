@@ -9,7 +9,7 @@ Each hashed block has an owner session, except the cross-session shared prefix (
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from kvtier.sessions import BLOCK
+from brb.sessions import BLOCK
 
 CHUNK_BLOCKS = 256 // BLOCK  # LMCache stores 256-token chunks
 

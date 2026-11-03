@@ -9,7 +9,7 @@ gpubox (2× RTX 2080 Ti, 11 GB each, NVLink NV2). Unless noted, each number is a
 |---|---|---|
 | NVIDIA driver | 580.126.09 (CUDA 13.0), graphics-drivers PPA | LMCache ≥ 0.4.5 needs CUDA 13; the old 535 driver topped out at CUDA 12.2 |
 | Python | 3.11 via `uv python install` | system python3 is 3.8 |
-| vLLM | 0.31.0, submodule `third_party/vllm`, branch `kvtier` | last stable release before LMCache 0.5.6 |
+| vLLM | 0.31.0, submodule `third_party/vllm`, branch `brb` | last stable release before LMCache 0.5.6 |
 | LMCache | 0.5.6 | latest; wheel built for torch 2.13 / CUDA 13, includes sm_75 |
 | torch | 2.13.0 (CUDA 13 build from PyPI) | pinned by vLLM 0.31.0 |
 | Attention backend | `TRITON_ATTN` | only `TRITON_ATTN` and `FLEX_ATTENTION` are offered on Turing |
@@ -80,7 +80,7 @@ Time to first token with `max_tokens=1`. "Cold" means no cached KV anywhere.
 
 ### Session ID path
 - **`vllm_xargs`** (OpenAI SDK: `extra_body={"vllm_xargs": {"session_id": ...}}`) reaches the
-  scheduler in the EngineCore process. Verified with a `KVTIER_LOG_SESSIONS=1` log line for raw
+  scheduler in the EngineCore process. Verified with a `BRB_LOG_SESSIONS=1` log line for raw
   chat, `/v1/completions`, and SDK streaming (the LiteLLM path).
 - `X-Request-Id` also reaches the engine, as the request ID prefix.
 - The OpenAI `user` field is **not** forwarded to the engine.
@@ -193,7 +193,7 @@ Docker images for the 70 tasks use ~60 GB; 282 GB free afterwards.
 
 ## Oct 22: simulator, Gate C, and a new direction
 
-Simulator `kvtier/sim` on the 56-trace training split, placeholder calibration `GATE_A_TP2` (reload
+Simulator `brb/sim` on the 56-trace training split, placeholder calibration `GATE_A_TP2` (reload
 overhead 0.25 s that blocks the batch; decode 25 ms + 0.5 ms per request). "Goodput" = requests per
 second whose time to first token is ≤ 5 s. All results are simulated; raw outputs in gpubox
 `results/sim/`.
@@ -373,12 +373,12 @@ gain comes from scheduling rather than pinning; the two combine.
 | Component | Status |
 |---|---|
 | `scripts/run_vllm.sh` | TP=2 default, LMCache CPU offload, `PYTHONHASHSEED=0` |
-| C1 hook | scheduler logs `vllm_xargs` session ID (`KVTIER_LOG_SESSIONS=1`) |
-| C2 `kvtier/predictor.py` | back-off keys, ring buffer 50, p10/p50/p90, confidence rule, `remaining()` time-left estimate; tested |
-| C3 `kvtier/cost.py` | interpolated prefill cost, KEEP/OFFLOAD/DISCARD, eviction score, prefetch lead; superseded for eviction by remaining-time eviction |
-| `kvtier/policy.py` | `KVPolicy` interface shared by the simulator and vLLM; methods take `now` |
-| C5 `kvtier/recorder.py` | 70 traces recorded (50 Verified, 20 Multilingual compiled) |
-| `kvtier/sessions.py` | traces → replay sessions (Qwen block-hash chains), shared with C6 |
-| C7 `kvtier/sim/` | done: LRU, always-offload, oracles, long-call offload, remaining-time eviction, Belady, Continuum; `--speedup`; 68 tests |
+| C1 hook | scheduler logs `vllm_xargs` session ID (`BRB_LOG_SESSIONS=1`) |
+| C2 `brb/predictor.py` | back-off keys, ring buffer 50, p10/p50/p90, confidence rule, `remaining()` time-left estimate; tested |
+| C3 `brb/cost.py` | interpolated prefill cost, KEEP/OFFLOAD/DISCARD, eviction score, prefetch lead; superseded for eviction by remaining-time eviction |
+| `brb/policy.py` | `KVPolicy` interface shared by the simulator and vLLM; methods take `now` |
+| C5 `brb/recorder.py` | 70 traces recorded (50 Verified, 20 Multilingual compiled) |
+| `brb/sessions.py` | traces → replay sessions (Qwen block-hash chains), shared with C6 |
+| C7 `brb/sim/` | done: LRU, always-offload, oracles, long-call offload, remaining-time eviction, Belady, Continuum; `--speedup`; 68 tests |
 | Gate C | fails on today's GPUs; passes for eviction order in the simulated memory-bound regime |
 | C6 harness, calibration, C1 eviction in vLLM, Gate D | week 2 |

@@ -3,7 +3,7 @@ import json
 import pytest
 from minisweagent.exceptions import FormatError, Submitted
 
-from kvtier.recorder import RecordingAgent, TraceWriter, api_cost, tool_program, usage_fields
+from brb.recorder import RecordingAgent, TraceWriter, api_cost, tool_program, usage_fields
 
 TEMPLATES = {"system_template": "sys", "instance_template": "task: {{task}}"}
 
@@ -149,7 +149,7 @@ def test_context_cap_stops_before_request(tmp_path):
 
 @pytest.mark.gpu  # needs the Qwen tokenizer in gpubox's HF cache
 def test_qwen_token_counter_counts_tokens():
-    from kvtier.recorder import qwen_token_counter
+    from brb.recorder import qwen_token_counter
 
     count = qwen_token_counter("Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
     short = count([{"role": "user", "content": "hi"}])
@@ -159,7 +159,7 @@ def test_qwen_token_counter_counts_tokens():
 
 
 def test_build_config_testing_workflow():
-    from kvtier.recorder import TESTING_WORKFLOW, build_config
+    from brb.recorder import TESTING_WORKFLOW, build_config
 
     with_tests = build_config("anthropic/claude-haiku-5-5", 80, 0.5, 600, require_tests=True)
     without = build_config("anthropic/claude-haiku-5-5", 80, 0.5, 600, require_tests=False)

@@ -71,7 +71,7 @@ Consequence: until prompt attention is fixed, both 7B and 0.5B are limited by th
 model size or memory. A modern GPU would not have this problem, so fixing it also makes the emulator
 more faithful. Capacity and pool sizes above must be re-measured after any kernel change.
 
-### Oct 29: SDPA for prompt chunks (vLLM fork `5440637`, `KVTIER_SDPA_PREFILL=1`, on by default)
+### Oct 29: SDPA for prompt chunks (vLLM fork `5440637`, `BRB_SDPA_PREFILL=1`, on by default)
 
 Mixed steps now run decodes through the Triton 3D path and prompt chunks through PyTorch SDPA. Matches
 the Triton kernel on random mixed batches (`tests/test_turing_attention.py`); 19/20 greedy replies
@@ -109,8 +109,8 @@ small pools load 6 @21K (99% ≤ 2 s), load 10 @33.6K (87%, queue starting late 
 
 ### Nov 1: first policy comparison (GPU 0, load 8, 3 seeds per cell)
 
-Our remaining-time eviction in vLLM (fork `b5f11c4`, `KVTIER_POLICY=remaining`) vs stock LRU vs the
-oracle (true pause from the harness, `KVTIER_POLICY=oracle`), all with LMCache:
+Our remaining-time eviction in vLLM (fork `b5f11c4`, `BRB_POLICY=remaining`) vs stock LRU vs the
+oracle (true pause from the harness, `BRB_POLICY=oracle`), all with LMCache:
 
 | pool | reloaded tokens: LRU | ours | oracle | gap closed |
 |---|---|---|---|---|

@@ -1,8 +1,8 @@
 import pytest
 
-from kvtier.cost import Calibration, CostModel, PredictivePolicy
-from kvtier.policy import Action, Session, State
-from kvtier.predictor import PausePredictor
+from brb.cost import Calibration, CostModel, PredictivePolicy
+from brb.policy import Action, Session, State
+from brb.predictor import PausePredictor
 
 CAL = Calibration(
     prefill_points=((0, 0.0), (8000, 8.0), (16000, 32.0)),

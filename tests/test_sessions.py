@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from kvtier.sessions import (
+from brb.sessions import (
     BLOCK,
     ReplaySession,
     block_hashes,

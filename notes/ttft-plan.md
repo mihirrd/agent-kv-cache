@@ -87,7 +87,7 @@ Exit: pick a value for all week 3 runs; then it is a fixed setting, not a result
 
 ## In parallel on CPU (any day): E better time-left guess
 
-In the simulator (`src/kvtier/predictor.py`, `remaining-evict`):
+In the simulator (`src/brb/predictor.py`, `remaining-evict`):
 1. Add the command's target (test file, directory, build target) as a key above session+tool in the
    back-off chain.
 2. Report guess error (median absolute error of time left) and goodput at 4×, 22 and 24/min, 5 seeds.

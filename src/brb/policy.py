@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 
-from kvtier.predictor import Prediction
+from brb.predictor import Prediction
 
 
 class Action(Enum):

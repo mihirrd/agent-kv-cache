@@ -7,8 +7,8 @@ sleeps for the recorded tool time. Every session copy gets a salt line at the st
 message: copies share only the system prompt, as in the simulator, and nothing carries over between runs.
 
 On gpubox, with the server up:
-  uv run python -m kvtier.replay check                  # replayed prompts match the trace token for token
-  uv run python -m kvtier.replay run --load 6 --seed 0  # writes results/replay/<config>/load6/<cap>/seed0/
+  uv run python -m brb.replay check                  # replayed prompts match the trace token for token
+  uv run python -m brb.replay run --load 6 --seed 0  # writes results/replay/<config>/load6/<cap>/seed0/
 """
 
 import argparse
@@ -23,11 +23,11 @@ from pathlib import Path
 
 import httpx
 
-from kvtier.predictor import percentile
-from kvtier.sessions import ReplaySession, block_hashes, load_sessions, split
+from brb.predictor import percentile
+from brb.sessions import ReplaySession, block_hashes, load_sessions, split
 
 DEFAULT_SESSIONS = ("traces/sessions/verified.jsonl", "traces/sessions/multilingual.jsonl")
-SLOS_S = (2.0, 5.0, 10.0)  # same as kvtier.sim.metrics
+SLOS_S = (2.0, 5.0, 10.0)  # same as brb.sim.metrics
 HEADLINE_SLO_S = 5.0
 # Prometheus series scraped during a run (C8); values are summed over label sets.
 METRICS = ("num_requests_running", "num_requests_waiting", "kv_cache_usage_perc", "num_preemptions_total",

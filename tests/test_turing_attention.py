@@ -1,4 +1,4 @@
-"""kvtier's split attention for mixed steps (vllm fork, triton_attn.py) matches vLLM's unified Triton kernel."""
+"""brb's split attention for mixed steps (vllm fork, triton_attn.py) matches vLLM's unified Triton kernel."""
 
 import pytest
 

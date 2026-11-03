@@ -6,8 +6,8 @@
   the pools where eviction happened without collapse, 45K and 60K, were about 1.5x and 2x live KV;
   the pool also holds reply blocks no prompt reuses and absorbs bursts above the average.
 
-    uv run python -m kvtier.plan load results/replay/a100-probe 4 8 12 16
-    uv run python -m kvtier.plan pools results/replay/a100-probe/load8/full/seed0 1.5 2
+    uv run python -m brb.plan load results/replay/a100-probe 4 8 12 16
+    uv run python -m brb.plan pools results/replay/a100-probe/load8/full/seed0 1.5 2
 """
 
 import argparse
@@ -78,7 +78,7 @@ def pools(run_dir: Path, fractions: list[float]) -> tuple[list[int], float, floa
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(prog="python -m kvtier.plan")
+    ap = argparse.ArgumentParser(prog="python -m brb.plan")
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("load", help="print the highest load that keeps up (nothing if none)")
     a.add_argument("config_dir", type=Path, help="results/replay/<config>, with load<L>/full/seed0 runs")

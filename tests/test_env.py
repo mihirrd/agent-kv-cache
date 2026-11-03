@@ -1,8 +1,8 @@
 import pytest
 
 
-def test_kvtier_imports():
-    import kvtier  # noqa: F401
+def test_brb_imports():
+    import brb  # noqa: F401
 
 
 @pytest.mark.gpu

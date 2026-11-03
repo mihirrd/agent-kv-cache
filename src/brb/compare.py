@@ -1,7 +1,7 @@
 """Compare eviction policies across pools and seeds: returning-turn TTFT, recompute and gap closed,
 then job completion time (Continuum's metric).
 
-Usage: python -m kvtier.compare <name> [policies...]
+Usage: python -m brb.compare <name> [policies...]
 Reads results/replay/<name>-<policy>/load*/<pool>/seed*/ (requests.jsonl, config.json). Each seed's
 metrics use the measurement window only; the table shows the mean over seeds, and the pooled
 columns put every seed's returning turns in one distribution. Job times cover sessions that arrived
@@ -14,7 +14,7 @@ import sys
 from functools import cache
 from pathlib import Path
 
-from kvtier.sessions import load_sessions
+from brb.sessions import load_sessions
 
 ROOT = Path("results/replay")
 QUANTILES = (0.5, 0.9, 0.99)

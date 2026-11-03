@@ -2,13 +2,13 @@ import math
 
 import pytest
 
-from kvtier.cost import Calibration, CostModel, PredictivePolicy
-from kvtier.sessions import BLOCK, ReplaySession
-from kvtier.sim.engine import SimConfig, Simulator
-from kvtier.sim.memory import CpuTier, GpuPool
-from kvtier.sim.policies import LruPolicy, OraclePolicy, TtlPinPolicy
-from kvtier.sim.server import Request, Server
-from kvtier.sim.timing import StepModel
+from brb.cost import Calibration, CostModel, PredictivePolicy
+from brb.sessions import BLOCK, ReplaySession
+from brb.sim.engine import SimConfig, Simulator
+from brb.sim.memory import CpuTier, GpuPool
+from brb.sim.policies import LruPolicy, OraclePolicy, TtlPinPolicy
+from brb.sim.server import Request, Server
+from brb.sim.timing import StepModel
 
 CAL = Calibration(
     prefill_points=((0, 0.0), (8000, 8.0), (16000, 32.0)),
@@ -122,7 +122,7 @@ def test_lru_without_cpu_recomputes_and_with_cpu_reloads():
 
 
 def test_oracle_evicts_the_long_pause_first():
-    from kvtier.policy import Session
+    from brb.policy import Session
 
     pol = OraclePolicy(COST)
     paused = [Session(name, context_tokens=2000, pause_start=0.0, true_pause_s=p)
@@ -139,7 +139,7 @@ def test_lru_session_returns_to_cpu_copy():
 
 
 def test_ttl_pin_orders_expired_first():
-    from kvtier.policy import Session
+    from brb.policy import Session
 
     pol = TtlPinPolicy(ttl_s=5.0)
     old_pinned = Session("p", pause_start=98.0, last_used=1.0)
@@ -177,7 +177,7 @@ def test_invariants_under_pressure(policy):
 
 
 def test_same_seed_same_result():
-    from kvtier.sim.metrics import summarize
+    from brb.sim.metrics import summarize
 
     sessions = many_sessions()
     cfg = SimConfig(load_per_min=6, cap_tokens=20_000, warmup_s=10, duration_s=120, drain_s=60, seed=3)
@@ -196,9 +196,9 @@ def test_no_pressure_policies_agree():
 
 
 def test_long_call_offload_classifies_by_predicted_median():
-    from kvtier.policy import Action, Session
-    from kvtier.predictor import PausePredictor
-    from kvtier.sim.policies import LongCallOffloadPolicy
+    from brb.policy import Action, Session
+    from brb.predictor import PausePredictor
+    from brb.sim.policies import LongCallOffloadPolicy
 
     pred = PausePredictor(min_samples=5)
     for _ in range(5):
@@ -215,7 +215,7 @@ def test_long_call_offload_classifies_by_predicted_median():
 
 
 def test_long_call_offload_runs_end_to_end():
-    from kvtier.sim.policies import LongCallOffloadPolicy
+    from brb.sim.policies import LongCallOffloadPolicy
 
     arrivals = [(5.0 * i, s) for i, s in enumerate(many_sessions())]
     sim, rec = simulate(LongCallOffloadPolicy(2.0, oracle=True), arrivals, cap_tokens=12_000, cpu=True)
@@ -225,9 +225,9 @@ def test_long_call_offload_runs_end_to_end():
 
 
 def test_remaining_time_eviction_order():
-    from kvtier.policy import Session
-    from kvtier.predictor import PausePredictor
-    from kvtier.sim.policies import RemainingTimeEviction
+    from brb.policy import Session
+    from brb.predictor import PausePredictor
+    from brb.sim.policies import RemainingTimeEviction
 
     pred = PausePredictor(min_samples=5)
     for _ in range(5):
@@ -247,8 +247,8 @@ def test_remaining_time_eviction_order():
 
 
 def test_continuum_ttl_choice():
-    from kvtier.policy import Session
-    from kvtier.sim.policies import ContinuumPolicy
+    from brb.policy import Session
+    from brb.sim.policies import ContinuumPolicy
 
     pol = ContinuumPolicy(COST, k_min=3)
     s = Session("s", program="pytest", context_tokens=8000)  # gain = 8.0 s prefill - 0.2229 s reload
@@ -266,8 +266,8 @@ def test_continuum_ttl_choice():
 
 
 def test_continuum_pins_then_evicts_latest_program_first():
-    from kvtier.policy import Session
-    from kvtier.sim.policies import ContinuumPolicy
+    from brb.policy import Session
+    from brb.sim.policies import ContinuumPolicy
 
     pol = ContinuumPolicy(COST)
     expired = Session("expired", pinned_until=5.0, last_used=1.0, program_arrival=0.0)
@@ -289,7 +289,7 @@ def test_program_fcfs_queue_order():
 
 
 def test_continuum_end_to_end():
-    from kvtier.sim.policies import ContinuumPolicy
+    from brb.sim.policies import ContinuumPolicy
 
     arrivals = [(5.0 * i, s) for i, s in enumerate(many_sessions())]
     cfg = SimConfig(load_per_min=1, cap_tokens=12_000, cpu_tier=True, prefetch=False, warmup_s=0,

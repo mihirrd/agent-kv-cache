@@ -5,8 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from kvtier.cost import GATE_A_TP2, CostModel
-from kvtier.replay import (
+from brb.cost import GATE_A_TP2, CostModel
+from brb.replay import (
     Replayer,
     ReplayTrace,
     RunConfig,
@@ -18,9 +18,9 @@ from kvtier.replay import (
     regime,
     summarize,
 )
-from kvtier.sessions import ReplaySession
-from kvtier.sim.engine import SimConfig, Simulator
-from kvtier.sim.policies import LruPolicy
+from brb.sessions import ReplaySession
+from brb.sim.engine import SimConfig, Simulator
+from brb.sim.policies import LruPolicy
 
 SESSIONS = Path("traces/sessions/verified.jsonl")
 BASE = "http://localhost:8000"

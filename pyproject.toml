@@ -1,7 +1,7 @@
 [project]
-name = "kvtier"
+name = "brb"
 version = "0.1.0"
-description = "Tool-aware KV cache tiering for agentic LLM serving"
+description = "BRB: tool-aware KV cache eviction for agentic LLM serving"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "vllm",

@@ -3,10 +3,20 @@
 Keys, most specific first: (session, program), (program), (tool category), global. A prediction
 comes from the first key with at least `min_samples` pauses and is confident when the p90/p10
 spread is at most `max_spread`. Pure Python so the simulator and vLLM share it.
+
+The history can be saved and loaded (`save` / `load`) so a restarted server keeps what it learned
+about each tool. Only the shared keys are saved, newest pauses last at 0.1 s resolution, capped at
+`MAX_SAVED_PROGRAMS` programs, least recently seen dropped first. Per-session keys stay in memory:
+they describe one agent's run and end with it.
 """
 
+import json
+import os
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
+
+MAX_SAVED_PROGRAMS = 256  # one-off names (script paths) must not grow the file without bound
 
 _CATEGORIES = {
     "test": {"pytest", "py.test", "tox", "nox", "nosetests", "runtests.py", "unittest", "ctest", "jest", "mocha", "rspec"},
@@ -57,7 +67,48 @@ class PausePredictor:
 
     def observe(self, session_id: str, program: str, pause_s: float) -> None:
         for key in self.keys(session_id, program):
-            self._buffers.setdefault(key, deque(maxlen=self.window)).append(pause_s)
+            # Re-inserted so the dict's order is least recently seen first (used when saving).
+            buf = self._buffers.pop(key, None) or deque(maxlen=self.window)
+            buf.append(pause_s)
+            self._buffers[key] = buf
+
+    def to_dict(self) -> dict:
+        """The saved history: per-program, per-category and global pauses, oldest first."""
+        out: dict = {"version": 1, "programs": {}, "tools": {}, "global": []}
+        programs = [k for k in self._buffers if k[0] == "program"][-MAX_SAVED_PROGRAMS:]
+        for key in programs + [k for k in self._buffers if k[0] in ("tool", "global")]:
+            pauses = [round(x, 1) for x in self._buffers[key]]
+            if key[0] == "global":
+                out["global"] = pauses
+            else:
+                out[key[0] + "s"][key[1]] = pauses
+        return out
+
+    def load_dict(self, d: dict) -> None:
+        """Seed the shared keys from a saved history (the last `window` pauses of each)."""
+        entries = [(("program", p), xs) for p, xs in d.get("programs", {}).items()]
+        entries += [(("tool", t), xs) for t, xs in d.get("tools", {}).items()]
+        entries.append((("global",), d.get("global", [])))
+        for key, xs in entries:
+            if xs:
+                self._buffers[key] = deque(xs, maxlen=self.window)
+
+    def save(self, path: str | Path) -> None:
+        """Write the history atomically, so a crash mid-write never leaves a broken file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self.to_dict(), separators=(",", ":")))
+        os.replace(tmp, path)
+
+    def load(self, path: str | Path) -> int:
+        """Load a saved history if the file exists; returns the number of programs loaded."""
+        path = Path(path)
+        if not path.exists():
+            return 0
+        d = json.loads(path.read_text())
+        self.load_dict(d)
+        return len(d.get("programs", {}))
 
     def remaining(self, session_id: str, program: str, elapsed: float) -> float | None:
         """Expected time left in a pause that has already lasted `elapsed` seconds: the median of

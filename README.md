@@ -43,5 +43,5 @@ git clone --recurse-submodules https://github.com/mihirrd/agent-kv-cache.git
 cd agent-kv-cache
 uv sync
 uv run pytest -m "not gpu"
-uv run python -m kvtier.sim run --policy remaining-evict always-offload --load 22 --speedup 4
+uv run python -m brb.sim run --policy remaining-evict always-offload --load 22 --speedup 4
 ```

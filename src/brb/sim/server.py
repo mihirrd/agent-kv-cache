@@ -10,9 +10,9 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from kvtier.sessions import BLOCK
-from kvtier.sim.memory import CpuTier, GpuPool
-from kvtier.sim.timing import StepModel
+from brb.sessions import BLOCK
+from brb.sim.memory import CpuTier, GpuPool
+from brb.sim.timing import StepModel
 
 _out_ids = itertools.count()
 

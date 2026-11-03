@@ -1,4 +1,4 @@
-Tool-Aware KV Cache Tiering: Technical Spec and Implementation Plan
+BRB: Tool-Aware KV Cache Eviction: Technical Spec and Implementation Plan
 Oct 16, 2026 · @Mihir Deshpande
 Overview
 We add a tool-aware KV cache manager to vLLM that predicts how long each agent pauses for a tool call and uses that prediction to place, evict, and prefetch the session's KV cache. The plan assumes 7 weeks (about Oct 19 to Dec 4, 2026), one NVIDIA GPU on the Purdue cluster, and a MacBook Air for GPU-free development.

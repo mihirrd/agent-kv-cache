@@ -1,6 +1,6 @@
 """Step-time model on top of the C3 cost model."""
 
-from kvtier.cost import CostModel
+from brb.cost import CostModel
 
 
 class StepModel:

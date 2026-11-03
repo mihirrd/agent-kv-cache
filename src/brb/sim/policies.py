@@ -1,11 +1,11 @@
-"""Baseline policies for the simulator; the predictive policy lives in kvtier.cost."""
+"""Baseline policies for the simulator; the predictive policy lives in brb.cost."""
 
 import math
 import random
 
-from kvtier.cost import CostModel, PredictivePolicy
-from kvtier.policy import Action, KVPolicy, Session
-from kvtier.predictor import PausePredictor, Prediction
+from brb.cost import CostModel, PredictivePolicy
+from brb.policy import Action, KVPolicy, Session
+from brb.predictor import PausePredictor, Prediction
 
 
 class LruPolicy(KVPolicy):

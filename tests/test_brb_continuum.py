@@ -1,4 +1,4 @@
-"""Continuum baseline (fork module vllm/v1/core/kvtier_continuum.py): pin rule, queue order, and pins
+"""Continuum baseline (fork module vllm/v1/core/brb_continuum.py): pin rule, queue order, and pins
 holding blocks in vLLM's real scheduler. CPU only; no GPU or server needed."""
 
 import sys
@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("vllm")
 
-from vllm.v1.core.kvtier_continuum import (  # noqa: E402
+from vllm.v1.core.brb_continuum import (  # noqa: E402
     PIN_S,
     Continuum,
     ContinuumRequestQueue,

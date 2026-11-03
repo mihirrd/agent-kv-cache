@@ -4,9 +4,9 @@ import csv
 import json
 from pathlib import Path
 
-from kvtier.predictor import percentile
-from kvtier.sessions import BLOCK
-from kvtier.sim.engine import Records, SimConfig
+from brb.predictor import percentile
+from brb.sessions import BLOCK
+from brb.sim.engine import Records, SimConfig
 
 SLOS_S = (2.0, 5.0, 10.0)
 HEADLINE_SLO_S = 5.0

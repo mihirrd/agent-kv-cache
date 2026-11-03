@@ -4,7 +4,7 @@ A replay session is the trace as the server sees it: per turn, the Qwen-tokenize
 chain of 16-token block hashes, like vLLM's prefix cache), the forced output length, the tool pause
 that follows, and the tool's program name. Turns past the context cap are dropped.
 
-Build on gpubox:  uv run python -m kvtier.sessions traces/raw/verified traces/sessions/verified.jsonl
+Build on gpubox:  uv run python -m brb.sessions traces/raw/verified traces/sessions/verified.jsonl
 """
 
 import argparse

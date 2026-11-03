@@ -4,7 +4,7 @@
 #   scripts/a100_queue.sh nocpu 7b     # the same with the 7B (the other pod)
 #   scripts/a100_queue.sh cpu 14b      # LMCache CPU tier on, a miss reloads (only if budget allows)
 # 1. capacity: full KV pool at rising loads, stopping at the first that falls behind;
-# 2. pools: 1.5x and 2x the live KV of the full-pool run at the highest load that kept up (kvtier.plan);
+# 2. pools: 1.5x and 2x the live KV of the full-pool run at the highest load that kept up (brb.plan);
 # 3. comparison: LRU / remaining-time / oracle x 2 pools x seeds.
 # Finished runs are skipped, so it resumes after a crash. AUTO_STOP=1 stops the pod when the queue
 # exits, finished or failed (results stay on /workspace). See notes/runpod.md.
@@ -51,14 +51,14 @@ if [[ -n "${LOAD:-}" && -n "${POOLS:-}" ]]; then
 else
   echo "[queue] $(date -Is) $MODEL, $MODE: capacity probes at loads ${LOADS[*]}" | tee -a "$PLAN"
   for load in "${LOADS[@]}"; do
-    done_run "$PROBE" "$load" full 0 || KVTIER_POLICY= scripts/emu_run.sh 0 full "$load" "$PROBE" --seed 0 "${EXTRA[@]}"
-    best=$(uv run python -m kvtier.plan load "results/replay/$PROBE" "${LOADS[@]}")
+    done_run "$PROBE" "$load" full 0 || BRB_POLICY= scripts/emu_run.sh 0 full "$load" "$PROBE" --seed 0 "${EXTRA[@]}"
+    best=$(uv run python -m brb.plan load "results/replay/$PROBE" "${LOADS[@]}")
     [[ "$best" == "$load" ]] || break  # this load fell behind; the probes above it would too
   done
-  best=$(uv run python -m kvtier.plan load "results/replay/$PROBE" "${LOADS[@]}")
+  best=$(uv run python -m brb.plan load "results/replay/$PROBE" "${LOADS[@]}")
   [[ -n "$best" ]] || { echo "[queue] no probed load keeps up; probe lower loads" | tee -a "$PLAN" >&2; exit 1; }
 
-  read -ra POOLS <<< "$(uv run python -m kvtier.plan pools "results/replay/$PROBE/load$best/full/seed0" "${FRACTIONS[@]}" 2>>"$PLAN")"
+  read -ra POOLS <<< "$(uv run python -m brb.plan pools "results/replay/$PROBE/load$best/full/seed0" "${FRACTIONS[@]}" 2>>"$PLAN")"
   for i in "${!POOLS[@]}"; do
     # vLLM needs one longest replayed request (~17K tokens) to fit in the pool.
     (( POOLS[i] >= 20000 )) || POOLS[i]=20000
@@ -66,12 +66,12 @@ else
 fi
 echo "[queue] $(date -Is) load $best, pools ${POOLS[*]}, seeds ${SEEDS[*]}, policies ${POLICIES[*]}" | tee -a "$PLAN"
 
-# policy name -> server env: eviction order (KVTIER_POLICY) and Continuum's scheduling (KVTIER_SCHED)
+# policy name -> server env: eviction order (BRB_POLICY) and Continuum's scheduling (BRB_SCHED)
 policy_env() {
   case $1 in
-    continuum) echo "KVTIER_POLICY= KVTIER_SCHED=continuum" ;;
-    *+continuum) echo "KVTIER_POLICY=${1%+continuum} KVTIER_SCHED=continuum" ;;
-    *) echo "KVTIER_POLICY=$1 KVTIER_SCHED=" ;;
+    continuum) echo "BRB_POLICY= BRB_SCHED=continuum" ;;
+    *+continuum) echo "BRB_POLICY=${1%+continuum} BRB_SCHED=continuum" ;;
+    *) echo "BRB_POLICY=$1 BRB_SCHED=" ;;
   esac
 }
 
